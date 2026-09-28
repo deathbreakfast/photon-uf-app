@@ -3,6 +3,7 @@ use leptos_router::hooks::use_params_map;
 use orbital::components::{Card, ContentContainer, SpacingSize, Title3};
 use orbital::primitives::{Flex, MessageBar, MessageBarIntent};
 
+use crate::components::server_fn_error_bar;
 use crate::components::EventMetaCard;
 use crate::server::get_event;
 
@@ -25,7 +26,7 @@ pub fn PhotonEventDetailPage() -> impl IntoView {
                             <EventMetaCard event=ev />
                         }.into_any(),
                         Some(Ok(None)) => view! { <MessageBar intent=MessageBarIntent::Warning>"Event not found"</MessageBar> }.into_any(),
-                        Some(Err(e)) => view! { <MessageBar intent=MessageBarIntent::Error>{e.to_string()}</MessageBar> }.into_any(),
+                        Some(Err(e)) => server_fn_error_bar(&e),
                         None => view! { <Card>"Loading..."</Card> }.into_any(),
                     }}
                 </Suspense>
