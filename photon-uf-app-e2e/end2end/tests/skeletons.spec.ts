@@ -93,20 +93,15 @@ test.describe("e2e.skeletons", () => {
   test("e2e.skeletons.events_table", async ({ page }) => {
     const seeded = await seedAuth(page, "admin");
     const dash = await openDashboard(page);
-    const release = await holdServerFn(page, /\/api\/get_events[^/?]*(\?|$)/);
+    // Hold every server fn: the events page also loads its topic list.
+    const release = await holdServerFn(page, /\/api\//);
+    // TEMP triage: log which server fns the events page calls.
+    page.on("request", (r) => {
+      if (r.url().includes("/api/")) console.log("API-REQUEST", r.method(), r.url());
+    });
 
     // First "View All" is Recent Events.
     await dash.getByRole("button", { name: /View All/ }).first().click();
-    // TEMP triage: what the page shows while get_events is held, and whether the shell survived.
-    await page.waitForTimeout(1_500);
-    console.log(
-      "EVENTS-DUMP",
-      await page.evaluate(() => ({
-        shell: (window as unknown as { __photonShell?: boolean }).__photonShell === true,
-        url: location.href,
-        main: (document.querySelector("main")?.innerHTML ?? "").slice(0, 5000),
-      })),
-    );
     const events = page.getByTestId("photon-events");
     await expect(events).toBeVisible({ timeout: 30_000 });
     const skeleton = events.getByTestId("photon-table-skeleton");
