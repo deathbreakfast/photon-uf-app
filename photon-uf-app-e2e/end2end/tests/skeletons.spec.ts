@@ -74,10 +74,11 @@ test.describe("e2e.skeletons", () => {
     await expect(metaSkeleton).toBeVisible();
     await expect(metaSkeleton.getByText("Details")).toBeVisible();
     await expect(metaSkeleton.getByText("Checkpoint lag")).toBeVisible();
-    // The events card waits on the subscription; its skeleton shows the real headers.
+    // The events card header renders while the subscription loads. (Its table skeleton
+    // isn't asserted: after client navigation the events table can resolve without a
+    // client fetch, so there's nothing to hold. e2e.skeletons.events_table covers it.)
     const events = detail.getByTestId("photon-subscription-events");
     await expect(events.getByText("Recent events on this topic")).toBeVisible();
-    await expect(events.getByTestId("photon-table-skeleton").getByText("Event ID")).toBeVisible();
     // Until the subscription loads, the title is the id from the URL.
     await expect(detail.getByText(subId, { exact: true }).first()).toBeVisible();
 
@@ -86,19 +87,16 @@ test.describe("e2e.skeletons", () => {
     await expect(meta).toBeVisible({ timeout: 30_000 });
     await expect(meta.getByText(subId)).toBeVisible();
     await expect(meta.getByRole("link", { name: seeded.fixtures.topic_name })).toBeVisible();
-    await expect(events.getByTestId("photon-table-skeleton")).toHaveCount(0, { timeout: 30_000 });
     await expectShellKept(page);
   });
 
   test("e2e.skeletons.events_table", async ({ page }) => {
     const seeded = await seedAuth(page, "admin");
     const dash = await openDashboard(page);
-    // Hold every server fn: the events page also loads its topic list.
+    // Hold every server fn. After client navigation the events page fetches only its
+    // topic list (the events arrive without a client call), and that is enough to keep
+    // the table on its skeleton.
     const release = await holdServerFn(page, /\/api\//);
-    // TEMP triage: log which server fns the events page calls.
-    page.on("request", (r) => {
-      if (r.url().includes("/api/")) console.log("API-REQUEST", r.method(), r.url());
-    });
 
     // First "View All" is Recent Events.
     await dash.getByRole("button", { name: /View All/ }).first().click();
