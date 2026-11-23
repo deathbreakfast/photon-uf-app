@@ -2,6 +2,8 @@
 //!
 //! Each one keeps the shape of what it stands in for (real table headers, the
 //! same cards and grids) and fills the values with Orbital `SkeletonItem`s.
+//! Every placeholder is one `Skeleton` (a single busy progressbar) carrying the
+//! placeholder's `data-testid`.
 
 use leptos::prelude::*;
 use orbital::components::{
@@ -19,23 +21,24 @@ pub const SKELETON_ROWS: usize = 5;
 /// A column of a [`TableSkeleton`]: header label and the width of its placeholder bar.
 pub type SkeletonColumn = (&'static str, &'static str);
 
+/// A placeholder line: width (CSS) and height.
+type Line = (&'static str, SkeletonItemSize);
+
 fn bar(width: &'static str, size: SkeletonItemSize) -> impl IntoView {
     view! { <SkeletonItem width=width size=Signal::from(size) /> }
 }
 
-/// Stack of placeholder lines, one per `(width, size)`.
-fn lines(lines: &[(&'static str, SkeletonItemSize)]) -> impl IntoView {
-    let bars = lines.iter().map(|&(w, s)| bar(w, s)).collect_view();
+/// Stack of placeholder lines. Place inside a `Skeleton`.
+fn lines(lines: Vec<Line>) -> impl IntoView {
     view! {
-        <Skeleton>
-            <Flex vertical=true gap=FlexGap::Small>{bars}</Flex>
-        </Skeleton>
+        <Flex vertical=true gap=FlexGap::Small>
+            {lines.into_iter().map(|(w, s)| bar(w, s)).collect_view()}
+        </Flex>
     }
 }
 
 /// Table with its real header row and `rows` rows of placeholder cells.
 #[component]
-#[allow(clippy::needless_pass_by_value)]
 pub fn TableSkeleton(
     /// Header label and placeholder width per column, in table order.
     columns: Vec<SkeletonColumn>,
@@ -46,28 +49,34 @@ pub fn TableSkeleton(
     let (style_sheet, class_names) = turf::inline_style_sheet_values! {
         .Table { width: 100%; }
     };
-    let headers = columns
-        .iter()
-        .map(|&(label, _)| view! { <TableHeaderCell>{label}</TableHeaderCell> })
-        .collect_view();
-    let body = (0..rows)
-        .map(|_| {
-            let cells = columns
-                .iter()
-                .map(|&(_, w)| view! { <TableCell>{bar(w, SkeletonItemSize::S16)}</TableCell> })
-                .collect_view();
-            view! { <TableRow>{cells}</TableRow> }
-        })
-        .collect_view();
+    let columns = StoredValue::new(columns);
 
     view! {
         <style>{style_sheet}</style>
         <Skeleton attr:data-testid="photon-table-skeleton">
             <Table class=class_names.table>
                 <TableHeader>
-                    <TableRow>{headers}</TableRow>
+                    <TableRow>
+                        {columns
+                            .get_value()
+                            .into_iter()
+                            .map(|(label, _)| view! { <TableHeaderCell>{label}</TableHeaderCell> })
+                            .collect_view()}
+                    </TableRow>
                 </TableHeader>
-                <TableBody>{body}</TableBody>
+                <TableBody>
+                    {(0..rows)
+                        .map(|_| view! {
+                            <TableRow>
+                                {columns
+                                    .get_value()
+                                    .into_iter()
+                                    .map(|(_, w)| view! { <TableCell>{bar(w, SkeletonItemSize::S16)}</TableCell> })
+                                    .collect_view()}
+                            </TableRow>
+                        })
+                        .collect_view()}
+                </TableBody>
             </Table>
         </Skeleton>
     }
@@ -75,36 +84,36 @@ pub fn TableSkeleton(
 
 /// `Card` + `CardContent` with one placeholder line per line the loaded card prints.
 #[component]
-#[allow(clippy::needless_pass_by_value)]
 pub fn LinesCardSkeleton(
     /// Width and height of each line.
-    lines: Vec<(&'static str, SkeletonItemSize)>,
+    lines: Vec<Line>,
 ) -> impl IntoView {
     view! {
-        <Card attr:data-testid="photon-card-skeleton">
-            <CardContent>{self::lines(&lines)}</CardContent>
-        </Card>
+        <Skeleton attr:data-testid="photon-card-skeleton">
+            <Card>
+                <CardContent>{self::lines(lines)}</CardContent>
+            </Card>
+        </Skeleton>
     }
 }
 
 /// Loading state for `PhotonStatsGrid`: the same grid with three label-and-value cards.
 #[component]
 pub fn StatsGridSkeleton() -> impl IntoView {
-    let card = || {
-        view! {
-            <Card>
-                <CardContent>
-                    {lines(&[("72px", SkeletonItemSize::S12), ("48px", SkeletonItemSize::S28)])}
-                </CardContent>
-            </Card>
-        }
-    };
     view! {
-        <AutoGrid attr:data-testid="photon-stats-skeleton" min="250px" gap=SpacingSize::Size160>
-            {card()}
-            {card()}
-            {card()}
-        </AutoGrid>
+        <Skeleton attr:data-testid="photon-stats-skeleton">
+            <AutoGrid min="250px" gap=SpacingSize::Size160>
+                {(0..3)
+                    .map(|_| view! {
+                        <Card>
+                            <CardContent>
+                                {lines(vec![("72px", SkeletonItemSize::S12), ("48px", SkeletonItemSize::S28)])}
+                            </CardContent>
+                        </Card>
+                    })
+                    .collect_view()}
+            </AutoGrid>
+        </Skeleton>
     }
 }
 
@@ -117,6 +126,25 @@ pub enum ListSkeletonKind {
     Subscriptions,
 }
 
+impl ListSkeletonKind {
+    fn lines(self) -> Vec<Line> {
+        match self {
+            Self::Topics => vec![
+                ("160px", SkeletonItemSize::S20),
+                ("70%", SkeletonItemSize::S12),
+                ("180px", SkeletonItemSize::S12),
+            ],
+            Self::Subscriptions => vec![
+                ("180px", SkeletonItemSize::S20),
+                ("140px", SkeletonItemSize::S12),
+                ("110px", SkeletonItemSize::S12),
+                ("120px", SkeletonItemSize::S12),
+                ("130px", SkeletonItemSize::S12),
+            ],
+        }
+    }
+}
+
 /// Loading state for the topics and subscriptions lists: three card-shaped
 /// placeholders inside the list's `Card`.
 #[component]
@@ -124,35 +152,31 @@ pub fn ListSkeleton(
     /// The card shape to imitate.
     kind: ListSkeletonKind,
 ) -> impl IntoView {
-    let shape: &[(&'static str, SkeletonItemSize)] = match kind {
-        ListSkeletonKind::Topics => &[
-            ("160px", SkeletonItemSize::S20),
-            ("70%", SkeletonItemSize::S12),
-            ("180px", SkeletonItemSize::S12),
-        ],
-        ListSkeletonKind::Subscriptions => &[
-            ("180px", SkeletonItemSize::S20),
-            ("140px", SkeletonItemSize::S12),
-            ("110px", SkeletonItemSize::S12),
-            ("120px", SkeletonItemSize::S12),
-            ("130px", SkeletonItemSize::S12),
-        ],
-    };
-    let cards = (0..3)
-        .map(|_| {
-            view! {
-                <Card variant=MaterialVariant::Outlined elevation=MaterialElevation::Flat gap=FlexGap::Size(0)>
-                    <CardContent>{lines(shape)}</CardContent>
-                </Card>
-            }
-        })
-        .collect_view();
-
     view! {
-        <Card attr:data-testid="photon-list-skeleton">
-            <CardContent>
-                <Flex vertical=true gap=FlexGap::Medium>{cards}</Flex>
-            </CardContent>
+        <Skeleton attr:data-testid="photon-list-skeleton">
+            <Card>
+                <CardContent>
+                    <Flex vertical=true gap=FlexGap::Medium>
+                        {(0..3)
+                            .map(|_| view! {
+                                <Card variant=MaterialVariant::Outlined elevation=MaterialElevation::Flat gap=FlexGap::Size(0)>
+                                    <CardContent>{lines(kind.lines())}</CardContent>
+                                </Card>
+                            })
+                            .collect_view()}
+                    </Flex>
+                </CardContent>
+            </Card>
+        </Skeleton>
+    }
+}
+
+/// Code block placeholder for the event detail Payload and Actor sections.
+fn code_lines(widths: &[&'static str]) -> impl IntoView {
+    let rows: Vec<Line> = widths.iter().map(|&w| (w, SkeletonItemSize::S12)).collect();
+    view! {
+        <Card>
+            <CardContent>{lines(rows)}</CardContent>
         </Card>
     }
 }
@@ -161,32 +185,30 @@ pub fn ListSkeleton(
 /// Actor headings over code-line placeholders.
 #[component]
 pub fn EventDetailSkeleton() -> impl IntoView {
-    let code = |widths: &[&'static str]| {
-        let rows: Vec<_> = widths.iter().map(|&w| (w, SkeletonItemSize::S12)).collect();
-        view! {
-            <Card>
-                <CardContent>{lines(&rows)}</CardContent>
-            </Card>
-        }
-    };
     view! {
-        <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
-            <LinesCardSkeleton lines=vec![
-                ("150px", SkeletonItemSize::S16),
-                ("120px", SkeletonItemSize::S16),
-                ("60px", SkeletonItemSize::S16),
-                ("220px", SkeletonItemSize::S16),
-                ("90px", SkeletonItemSize::S16),
-            ] />
-            <Flex vertical=true gap=FlexGap::Small>
-                <Subtitle2>"Payload"</Subtitle2>
-                {code(&["16px", "240px", "80px", "180px", "16px"])}
+        <Skeleton attr:data-testid="photon-event-detail-skeleton">
+            <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
+                <Card>
+                    <CardContent>
+                        {lines(vec![
+                            ("150px", SkeletonItemSize::S16),
+                            ("120px", SkeletonItemSize::S16),
+                            ("60px", SkeletonItemSize::S16),
+                            ("220px", SkeletonItemSize::S16),
+                            ("90px", SkeletonItemSize::S16),
+                        ])}
+                    </CardContent>
+                </Card>
+                <Flex vertical=true gap=FlexGap::Small>
+                    <Subtitle2>"Payload"</Subtitle2>
+                    {code_lines(&["16px", "240px", "80px", "180px", "16px"])}
+                </Flex>
+                <Flex vertical=true gap=FlexGap::Small>
+                    <Subtitle2>"Actor"</Subtitle2>
+                    {code_lines(&["16px", "120px", "160px", "16px"])}
+                </Flex>
             </Flex>
-            <Flex vertical=true gap=FlexGap::Small>
-                <Subtitle2>"Actor"</Subtitle2>
-                {code(&["16px", "120px", "160px", "16px"])}
-            </Flex>
-        </Flex>
+        </Skeleton>
     }
 }
 
@@ -196,18 +218,18 @@ pub fn EventDetailSkeleton() -> impl IntoView {
 pub fn PageSkeleton() -> impl IntoView {
     view! {
         <ContentContainer data_testid="photon-page-skeleton">
-            <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
-                <Skeleton>{bar("200px", SkeletonItemSize::S28)}</Skeleton>
-                <Card>
-                    <CardContent>
-                        <Skeleton>
+            <Skeleton>
+                <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
+                    {bar("200px", SkeletonItemSize::S28)}
+                    <Card>
+                        <CardContent>
                             <Flex vertical=true gap=FlexGap::Small>
                                 {(0..6).map(|_| view! { <SkeletonItem /> }).collect_view()}
                             </Flex>
-                        </Skeleton>
-                    </CardContent>
-                </Card>
-            </Flex>
+                        </CardContent>
+                    </Card>
+                </Flex>
+            </Skeleton>
         </ContentContainer>
     }
 }

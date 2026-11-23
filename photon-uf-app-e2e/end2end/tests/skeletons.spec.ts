@@ -101,6 +101,8 @@ test.describe("e2e.skeletons", () => {
     await expect(events).toBeVisible({ timeout: 30_000 });
     const skeleton = events.getByTestId("photon-table-skeleton");
     await expect(skeleton).toBeVisible();
+    // TEMP triage: dump the skeleton markup so a header miss can be explained.
+    console.log("SKELETON-DUMP", (await events.innerHTML()).slice(0, 6000));
     for (const header of ["Event ID", "Topic", "Key", "Seq", "Created"]) {
       await expect(skeleton.getByText(header, { exact: true })).toBeVisible();
     }

@@ -82,24 +82,27 @@ pub fn SubscriptionMetaCard(
         view! { <Body1 block=true>{lag_label(sub.checkpoint_lag, sub.last_seq)}</Body1> }.into_any(),
         view! { <Body1 block=true>{last_seq_label(sub.last_seq)}</Body1> }.into_any(),
     ];
-    let cells = LABELS
-        .into_iter()
-        .zip(values)
-        .map(|(label, value)| field(label, value))
-        .collect_view();
-
     view! {
-        <Card attr:data-testid="photon-subscription-meta">
-            <CardHeader>
-                <Subtitle2>"Details"</Subtitle2>
-                <CardHeaderAction slot>
-                    <SubscriptionStatusBadge enabled=sub.enabled />
-                </CardHeaderAction>
-            </CardHeader>
-            <CardContent>
-                <Grid config=GridConfig::with_gaps(2, 16, 16)>{cells}</Grid>
-            </CardContent>
-        </Card>
+        <div data-testid="photon-subscription-meta">
+            <Card>
+                <CardHeader>
+                    <Subtitle2>"Details"</Subtitle2>
+                    <CardHeaderAction slot>
+                        <SubscriptionStatusBadge enabled=sub.enabled />
+                    </CardHeaderAction>
+                </CardHeader>
+                <CardContent>
+                    // Cells are built inside Grid: GridItem reads Grid's context.
+                    <Grid config=GridConfig::with_gaps(2, 16, 16)>
+                        {values
+                            .into_iter()
+                            .zip(LABELS)
+                            .map(|(value, label)| field(label, value))
+                            .collect_view()}
+                    </Grid>
+                </CardContent>
+            </Card>
+        </div>
     }
 }
 
@@ -108,23 +111,24 @@ pub fn SubscriptionMetaCard(
 #[component]
 pub fn SubscriptionMetaCardSkeleton() -> impl IntoView {
     let widths = ["220px", "120px", "90px", "60px", "80px", "40px"];
-    let cells = LABELS
-        .into_iter()
-        .zip(widths)
-        .map(|(label, width)| field(label, view! { <SkeletonItem width=width /> }.into_any()))
-        .collect_view();
 
     view! {
-        <Card attr:data-testid="photon-subscription-meta-skeleton">
-            <CardHeader>
-                <Subtitle2>"Details"</Subtitle2>
-            </CardHeader>
-            <CardContent>
-                <Skeleton>
-                    <Grid config=GridConfig::with_gaps(2, 16, 16)>{cells}</Grid>
-                </Skeleton>
-            </CardContent>
-        </Card>
+        <Skeleton attr:data-testid="photon-subscription-meta-skeleton">
+            <Card>
+                <CardHeader>
+                    <Subtitle2>"Details"</Subtitle2>
+                </CardHeader>
+                <CardContent>
+                    <Grid config=GridConfig::with_gaps(2, 16, 16)>
+                        {LABELS
+                            .into_iter()
+                            .zip(widths)
+                            .map(|(label, width)| field(label, view! { <SkeletonItem width=width /> }.into_any()))
+                            .collect_view()}
+                    </Grid>
+                </CardContent>
+            </Card>
+        </Skeleton>
     }
 }
 

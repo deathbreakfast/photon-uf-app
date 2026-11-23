@@ -67,7 +67,8 @@ pub fn PhotonSubscriptionDetailPage() -> impl IntoView {
                     }}
                 </Suspense>
 
-                <Card attr:data-testid="photon-subscription-events">
+                <div data-testid="photon-subscription-events">
+                <Card>
                     <CardHeader>
                         <Subtitle2>"Recent events on this topic"</Subtitle2>
                         <CardHeaderDescription slot>
@@ -84,6 +85,7 @@ pub fn PhotonSubscriptionDetailPage() -> impl IntoView {
                         }}
                     </Suspense>
                 </Card>
+                </div>
             </Flex>
         </ContentContainer>
     }
