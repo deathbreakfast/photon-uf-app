@@ -28,21 +28,6 @@ pub fn PhotonSubscriptionDetailPage() -> impl IntoView {
     let id = move || params.get().get("id").unwrap_or_default();
 
     let sub_res = Resource::new(id, |sid| async move { get_subscription(sid).await });
-    // The route carries only the id, so the topic (and the events call) waits on the subscription.
-    let topic_for_events = move || {
-        sub_res
-            .get()
-            .and_then(|r| r.ok().flatten())
-            .map(|s| s.topic_name)
-    };
-    let events_res = Resource::new(topic_for_events, |topic_opt| async move {
-        if let Some(topic) = topic_opt {
-            get_events(Some(topic), 20).await
-        } else {
-            Ok(vec![])
-        }
-    });
-
     view! {
         <ContentContainer data_testid="photon-subscription-detail">
             <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
@@ -75,18 +60,43 @@ pub fn PhotonSubscriptionDetailPage() -> impl IntoView {
                             <Caption1>"The newest events on the topic, not only the ones this subscription handled."</Caption1>
                         </CardHeaderDescription>
                     </CardHeader>
+                    // The route carries only the id, so the events call waits for the
+                    // subscription's topic. It lives in a child component so its resource
+                    // is created and read inside this Suspense, never at page level.
                     <Suspense fallback=move || view! { <EventsTableSkeleton columns=SUB_EVENT_COLUMNS /> }>
-                        {move || match (sub_res.get(), events_res.get()) {
-                            (None, _) | (_, None) => view! { <EventsTableSkeleton columns=SUB_EVENT_COLUMNS /> }.into_any(),
-                            (Some(_), Some(Ok(events))) => view! {
-                                <EventsTable events=events columns=SUB_EVENT_COLUMNS />
-                            }.into_any(),
-                            (Some(_), Some(Err(e))) => server_fn_error_bar(&e),
+                        {move || match sub_res.get() {
+                            None => view! { <EventsTableSkeleton columns=SUB_EVENT_COLUMNS /> }.into_any(),
+                            Some(Ok(Some(s))) => view! { <TopicEvents topic=s.topic_name /> }.into_any(),
+                            Some(_) => view! { <EventsTable events=vec![] columns=SUB_EVENT_COLUMNS /> }.into_any(),
                         }}
                     </Suspense>
                 </Card>
                 </div>
             </Flex>
         </ContentContainer>
+    }
+}
+
+/// Recent events on the subscription's topic, with its own resource and skeleton.
+#[component]
+fn TopicEvents(
+    /// Topic to list events for.
+    topic: String,
+) -> impl IntoView {
+    let events_res = Resource::new(
+        move || topic.clone(),
+        |topic| async move { get_events(Some(topic), 20).await },
+    );
+
+    view! {
+        <Suspense fallback=move || view! { <EventsTableSkeleton columns=SUB_EVENT_COLUMNS /> }>
+            {move || match events_res.get() {
+                Some(Ok(events)) => view! {
+                    <EventsTable events=events columns=SUB_EVENT_COLUMNS />
+                }.into_any(),
+                Some(Err(e)) => server_fn_error_bar(&e),
+                None => view! { <EventsTableSkeleton columns=SUB_EVENT_COLUMNS /> }.into_any(),
+            }}
+        </Suspense>
     }
 }

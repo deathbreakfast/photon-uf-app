@@ -97,12 +97,20 @@ test.describe("e2e.skeletons", () => {
 
     // First "View All" is Recent Events.
     await dash.getByRole("button", { name: /View All/ }).first().click();
+    // TEMP triage: what the page shows while get_events is held, and whether the shell survived.
+    await page.waitForTimeout(1_500);
+    console.log(
+      "EVENTS-DUMP",
+      await page.evaluate(() => ({
+        shell: (window as unknown as { __photonShell?: boolean }).__photonShell === true,
+        url: location.href,
+        main: (document.querySelector("main")?.innerHTML ?? "").slice(0, 5000),
+      })),
+    );
     const events = page.getByTestId("photon-events");
     await expect(events).toBeVisible({ timeout: 30_000 });
     const skeleton = events.getByTestId("photon-table-skeleton");
     await expect(skeleton).toBeVisible();
-    // TEMP triage: dump the skeleton markup so a header miss can be explained.
-    console.log("SKELETON-DUMP", (await events.innerHTML()).slice(0, 6000));
     for (const header of ["Event ID", "Topic", "Key", "Seq", "Created"]) {
       await expect(skeleton.getByText(header, { exact: true })).toBeVisible();
     }
