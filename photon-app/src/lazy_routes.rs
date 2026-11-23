@@ -13,9 +13,16 @@ use crate::{
     PhotonTopicsIndexPage,
 };
 
-/// Prefetch the photon family WASM chunk (leaf pages share split modules).
+/// Prefetch every Photon leaf page's WASM chunk, so moving between Photon pages
+/// never waits on a download.
 pub async fn prefetch_family() {
     PhotonDashboardRoute::preload().await;
+    PhotonTopicsIndexRoute::preload().await;
+    PhotonTopicDetailRoute::preload().await;
+    PhotonSubscriptionsIndexRoute::preload().await;
+    PhotonSubscriptionDetailRoute::preload().await;
+    PhotonEventsIndexRoute::preload().await;
+    PhotonEventDetailRoute::preload().await;
 }
 
 /// Eager layout shell for `/photon/*` ParentRoute (auth gate lives inside [`PhotonLayout`]).

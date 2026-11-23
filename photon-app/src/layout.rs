@@ -9,6 +9,7 @@ use uf_integrations::{
     ShellAppBar, ShellAuthMenu, ShellLeftNav, UnifiedFieldAppBar, UnifiedFieldShellLayout,
 };
 
+use crate::components::PageSkeleton;
 use crate::paths;
 use crate::AppMetadata;
 
@@ -49,7 +50,11 @@ pub fn PhotonLayout() -> impl IntoView {
                 </Navigation>
             </ShellLeftNav>
             <RequireAuthenticated>
-                <Outlet />
+                // A lazy page's code chunk can take a moment on first visit; show its
+                // skeleton instead of leaving the previous page frozen in place.
+                <Suspense fallback=|| view! { <PageSkeleton /> }>
+                    <Outlet />
+                </Suspense>
             </RequireAuthenticated>
         </UnifiedFieldShellLayout>
         </div>

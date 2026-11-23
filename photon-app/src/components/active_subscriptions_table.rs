@@ -2,6 +2,7 @@
 
 use leptos::prelude::*;
 
+use crate::components::skeletons::TableSkeleton;
 use crate::components::SubscriptionStatusBadge;
 use crate::server::SubscriptionSummary;
 use orbital::primitives::{Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow};
@@ -51,5 +52,13 @@ pub fn ActiveSubscriptionsTable(
                 </For>
             </TableBody>
         </Table>
+    }
+}
+
+/// Loading state for [`ActiveSubscriptionsTable`]: its header row over placeholder rows.
+#[component]
+pub fn ActiveSubscriptionsTableSkeleton() -> impl IntoView {
+    view! {
+        <TableSkeleton columns=vec![("Name", "140px"), ("Topic", "120px"), ("Status", "36px"), ("Lag", "28px")] />
     }
 }
