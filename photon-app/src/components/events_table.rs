@@ -5,6 +5,7 @@
 
 use leptos::prelude::*;
 
+use crate::components::skeletons::TableSkeleton;
 use crate::server::EventSummary;
 use orbital::primitives::{Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow};
 
@@ -22,6 +23,22 @@ pub struct EventsTableColumns {
     pub show_seq: bool,
     /// Show the Created column.
     pub show_created: bool,
+}
+
+impl EventsTableColumns {
+    /// Header label and skeleton bar width for each visible column, in table order.
+    fn visible(self) -> Vec<(&'static str, &'static str)> {
+        [
+            (self.show_event_id, "Event ID", "96px"),
+            (self.show_topic, "Topic", "120px"),
+            (self.show_key, "Key", "96px"),
+            (self.show_seq, "Seq", "32px"),
+            (self.show_created, "Created", "160px"),
+        ]
+        .into_iter()
+        .filter_map(|(on, label, width)| on.then_some((label, width)))
+        .collect()
+    }
 }
 
 impl Default for EventsTableColumns {
@@ -70,15 +87,7 @@ pub fn EventsTable(
     view! {
         <style>{style_sheet}</style>
         <Table class=class_names.table>
-            <TableHeader>
-                <TableRow>
-                    {show_event_id.then(|| view! { <TableHeaderCell>"Event ID"</TableHeaderCell> })}
-                    {show_topic.then(|| view! { <TableHeaderCell>"Topic"</TableHeaderCell> })}
-                    {show_key.then(|| view! { <TableHeaderCell>"Key"</TableHeaderCell> })}
-                    {show_seq.then(|| view! { <TableHeaderCell>"Seq"</TableHeaderCell> })}
-                    {show_created.then(|| view! { <TableHeaderCell>"Created"</TableHeaderCell> })}
-                </TableRow>
-            </TableHeader>
+            <EventsTableHeader columns=columns />
             <TableBody>
                 <For
                     each=move || events.get_value()
@@ -112,4 +121,31 @@ pub fn EventsTable(
             </TableBody>
         </Table>
     }
+}
+
+/// Header row shared by [`EventsTable`] and [`EventsTableSkeleton`].
+#[component]
+fn EventsTableHeader(columns: EventsTableColumns) -> impl IntoView {
+    view! {
+        <TableHeader>
+            <TableRow>
+                {columns
+                    .visible()
+                    .into_iter()
+                    .map(|(label, _)| view! { <TableHeaderCell>{label}</TableHeaderCell> })
+                    .collect_view()}
+            </TableRow>
+        </TableHeader>
+    }
+}
+
+/// Loading state for [`EventsTable`]: the real header row over rows of
+/// `SkeletonItem` cells, so the columns are visible before the events arrive.
+#[component]
+pub fn EventsTableSkeleton(
+    /// Column visibility; pass the same flags as the [`EventsTable`] it stands in for.
+    #[prop(optional)]
+    columns: Option<EventsTableColumns>,
+) -> impl IntoView {
+    view! { <TableSkeleton columns=columns.unwrap_or_default().visible() /> }
 }

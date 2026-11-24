@@ -3,7 +3,10 @@ use leptos_router::hooks::use_navigate;
 use orbital::components::{Body1, Card, ContentContainer, EmptyState, SpacingSize, Title3};
 use orbital::primitives::{Flex, FlexGap};
 
-use crate::components::{server_fn_error_bar, SubscriptionCard, SubscriptionFilterToolbar};
+use crate::components::{
+    server_fn_error_bar, ListSkeleton, ListSkeletonKind, SubscriptionCard,
+    SubscriptionFilterToolbar,
+};
 use crate::server::{get_subscriptions, SubscriptionSummary};
 
 /// Subscription index: searchable, filterable list of all subscriptions.
@@ -54,7 +57,7 @@ pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
 
                 <SubscriptionFilterToolbar search_query=search_query status_str=status_str />
 
-                <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                <Suspense fallback=move || view! { <ListSkeleton kind=ListSkeletonKind::Subscriptions /> }>
                     {move || {
                         match subs_res.get() {
                         Some(Ok(_)) => {
@@ -94,7 +97,7 @@ pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
                             }.into_any()
                         }
                         Some(Err(e)) => server_fn_error_bar(&e),
-                        None => view! { <Card>"Loading..."</Card> }.into_any(),
+                        None => view! { <ListSkeleton kind=ListSkeletonKind::Subscriptions /> }.into_any(),
                         }
                     }}
                 </Suspense>

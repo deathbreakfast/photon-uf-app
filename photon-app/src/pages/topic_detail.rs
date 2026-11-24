@@ -1,12 +1,36 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
-use orbital::components::{Card, ContentContainer, SpacingSize, Subtitle2, Title3};
+use orbital::components::{
+    Card, ContentContainer, SkeletonItemSize, SpacingSize, Subtitle2, Title3,
+};
 use orbital::primitives::{Flex, MessageBar, MessageBarIntent};
 
 use crate::components::{
-    server_fn_error_bar, EventsTable, EventsTableColumns, TopicMetaCard, TopicSubscriptionsTable,
+    server_fn_error_bar, EventsTable, EventsTableColumns, EventsTableSkeleton, LinesCardSkeleton,
+    TopicMetaCard, TopicSubscriptionsTable, TopicSubscriptionsTableSkeleton,
 };
 use crate::server::{get_events, get_subscriptions, get_topic};
+
+/// Recent events columns: the topic is the page's, so no Topic or Key column.
+const TOPIC_EVENT_COLUMNS: EventsTableColumns = EventsTableColumns {
+    show_event_id: true,
+    show_topic: false,
+    show_key: false,
+    show_seq: true,
+    show_created: true,
+};
+
+/// Placeholder for `TopicMetaCard`: keyed-by, schema, and counts lines.
+#[component]
+fn TopicMetaSkeleton() -> impl IntoView {
+    view! {
+        <LinesCardSkeleton lines=vec![
+            ("140px", SkeletonItemSize::S16),
+            ("80%", SkeletonItemSize::S16),
+            ("200px", SkeletonItemSize::S16),
+        ] />
+    }
+}
 
 /// Detail view for a single topic: schema, subscriptions, and recent events.
 #[component]
@@ -25,20 +49,20 @@ pub fn PhotonTopicDetailPage() -> impl IntoView {
             <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
                 <Title3>"Topic: " {move || topic_name()}</Title3>
 
-                <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                <Suspense fallback=move || view! { <TopicMetaSkeleton /> }>
                     {move || match topic_res.get() {
                         Some(Ok(Some(t))) => view! {
                             <TopicMetaCard topic=t />
                         }.into_any(),
                         Some(Ok(None)) => view! { <MessageBar intent=MessageBarIntent::Warning>"Topic not found"</MessageBar> }.into_any(),
                         Some(Err(e)) => server_fn_error_bar(&e),
-                        None => view! { <Card>"Loading..."</Card> }.into_any(),
+                        None => view! { <TopicMetaSkeleton /> }.into_any(),
                     }}
                 </Suspense>
 
                 <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
                     <Subtitle2>"Subscriptions for this topic"</Subtitle2>
-                    <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                    <Suspense fallback=move || view! { <TopicSubscriptionsTableSkeleton /> }>
                         {move || {
                             let name = topic_name();
                             match subs_res.get() {
@@ -48,7 +72,7 @@ pub fn PhotonTopicDetailPage() -> impl IntoView {
                                         <TopicSubscriptionsTable subs=filtered />
                                     }.into_any()
                                 }
-                                _ => view! { <Card>"Loading..."</Card> }.into_any(),
+                                _ => view! { <TopicSubscriptionsTableSkeleton /> }.into_any(),
                             }
                         }}
                     </Suspense>
@@ -56,25 +80,19 @@ pub fn PhotonTopicDetailPage() -> impl IntoView {
 
                 <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
                     <Subtitle2>"Recent events"</Subtitle2>
-                    <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                    <Suspense fallback=move || view! { <Card><EventsTableSkeleton columns=TOPIC_EVENT_COLUMNS /></Card> }>
                         {move || {
                             match events_res.get() {
                                 Some(Ok(events)) => view! {
                                     <Card>
                                         <EventsTable
                                             events=events
-                                            columns=EventsTableColumns {
-                                                show_event_id: true,
-                                                show_topic: false,
-                                                show_key: false,
-                                                show_seq: true,
-                                                show_created: true,
-                                            }
+                                            columns=TOPIC_EVENT_COLUMNS
                                         />
                                     </Card>
                                 }.into_any(),
                                 Some(Err(e)) => server_fn_error_bar(&e),
-                                None => view! { <Card>"Loading..."</Card> }.into_any(),
+                                None => view! { <Card><EventsTableSkeleton columns=TOPIC_EVENT_COLUMNS /></Card> }.into_any(),
                             }
                         }}
                     </Suspense>

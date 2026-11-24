@@ -5,10 +5,20 @@ use orbital::components::{Card, ContentContainer, SpacingSize, Subtitle2, Title3
 use orbital::primitives::{Button, ButtonAppearance, Flex, Space};
 
 use crate::components::{
-    server_fn_error_bar, server_fn_error_bar_with_prefix, ActiveSubscriptionsTable, EventsTable,
-    EventsTableColumns, PhotonStatsGrid,
+    server_fn_error_bar, server_fn_error_bar_with_prefix, ActiveSubscriptionsTable,
+    ActiveSubscriptionsTableSkeleton, EventsTable, EventsTableColumns, EventsTableSkeleton,
+    PhotonStatsGrid, StatsGridSkeleton,
 };
 use crate::server::{get_dashboard_stats, get_recent_events, get_subscriptions};
+
+/// Recent Events columns: topic links to the event, so no Event ID column.
+const RECENT_EVENT_COLUMNS: EventsTableColumns = EventsTableColumns {
+    show_event_id: false,
+    show_topic: true,
+    show_key: true,
+    show_seq: true,
+    show_created: true,
+};
 
 /// Photon dashboard: aggregate stats, recent events, and active subscriptions at a glance.
 #[component]
@@ -25,13 +35,13 @@ pub fn PhotonDashboardPage() -> impl IntoView {
             <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
                 <Title3>"Photon Dashboard"</Title3>
 
-                <Suspense fallback=move || view! { <div>"Loading..."</div> }>
+                <Suspense fallback=move || view! { <StatsGridSkeleton /> }>
                     {move || match stats_res.get() {
                         Some(Ok(stats)) => view! {
                             <PhotonStatsGrid stats=stats />
                         }.into_any(),
                         Some(Err(e)) => server_fn_error_bar_with_prefix("Failed to load stats: ", &e),
-                        None => view! { <div>"Loading..."</div> }.into_any(),
+                        None => view! { <StatsGridSkeleton /> }.into_any(),
                     }}
                 </Suspense>
 
@@ -45,24 +55,18 @@ pub fn PhotonDashboardPage() -> impl IntoView {
                             "View All \u{2192}"
                         </Button>
                     </Space>
-                    <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                    <Suspense fallback=move || view! { <Card><EventsTableSkeleton columns=RECENT_EVENT_COLUMNS /></Card> }>
                         {move || match events_res.get() {
                             Some(Ok(events)) => view! {
                                 <Card>
                                     <EventsTable
                                         events=events
-                                        columns=EventsTableColumns {
-                                            show_event_id: false,
-                                            show_key: true,
-                                            show_topic: true,
-                                            show_seq: true,
-                                            show_created: true,
-                                        }
+                                        columns=RECENT_EVENT_COLUMNS
                                     />
                                 </Card>
                             }.into_any(),
                             Some(Err(e)) => server_fn_error_bar(&e),
-                            None => view! { <Card>"Loading..."</Card> }.into_any(),
+                            None => view! { <Card><EventsTableSkeleton columns=RECENT_EVENT_COLUMNS /></Card> }.into_any(),
                         }}
                     </Suspense>
                 </Flex>
@@ -77,7 +81,7 @@ pub fn PhotonDashboardPage() -> impl IntoView {
                             "View All \u{2192}"
                         </Button>
                     </Space>
-                    <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                    <Suspense fallback=move || view! { <Card><ActiveSubscriptionsTableSkeleton /></Card> }>
                         {move || match subs_res.get() {
                             Some(Ok(subs)) => view! {
                                 <Card>
@@ -85,7 +89,7 @@ pub fn PhotonDashboardPage() -> impl IntoView {
                                 </Card>
                             }.into_any(),
                             Some(Err(e)) => server_fn_error_bar(&e),
-                            None => view! { <Card>"Loading..."</Card> }.into_any(),
+                            None => view! { <Card><ActiveSubscriptionsTableSkeleton /></Card> }.into_any(),
                         }}
                     </Suspense>
                 </Flex>

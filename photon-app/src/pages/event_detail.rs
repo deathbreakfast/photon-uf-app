@@ -1,10 +1,10 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
-use orbital::components::{Card, ContentContainer, SpacingSize, Title3};
+use orbital::components::{ContentContainer, SpacingSize, Title3};
 use orbital::primitives::{Flex, MessageBar, MessageBarIntent};
 
 use crate::components::server_fn_error_bar;
-use crate::components::EventMetaCard;
+use crate::components::{EventDetailSkeleton, EventMetaCard};
 use crate::server::get_event;
 
 /// Detail view for a single event: metadata, payload, and actor context.
@@ -20,14 +20,14 @@ pub fn PhotonEventDetailPage() -> impl IntoView {
             <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
                 <Title3>"Event: " {move || id()}</Title3>
 
-                <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                <Suspense fallback=move || view! { <EventDetailSkeleton /> }>
                     {move || match event_res.get() {
                         Some(Ok(Some(ev))) => view! {
                             <EventMetaCard event=ev />
                         }.into_any(),
                         Some(Ok(None)) => view! { <MessageBar intent=MessageBarIntent::Warning>"Event not found"</MessageBar> }.into_any(),
                         Some(Err(e)) => server_fn_error_bar(&e),
-                        None => view! { <Card>"Loading..."</Card> }.into_any(),
+                        None => view! { <EventDetailSkeleton /> }.into_any(),
                     }}
                 </Suspense>
             </Flex>
