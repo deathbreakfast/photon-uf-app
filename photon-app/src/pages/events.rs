@@ -3,7 +3,9 @@ use leptos_router::hooks::use_navigate;
 use orbital::components::{Body1, Card, ContentContainer, EmptyState, SpacingSize, Title3};
 use orbital::primitives::Flex;
 
-use crate::components::{server_fn_error_bar, EventFilterToolbar, EventsTable};
+use crate::components::{
+    server_fn_error_bar, EventFilterToolbar, EventsTable, EventsTableSkeleton,
+};
 use crate::server::{get_events, get_topics};
 
 /// Event index: filterable, paginated list of events across all topics.
@@ -36,7 +38,7 @@ pub fn PhotonEventsIndexPage() -> impl IntoView {
             <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
                 <Title3>"Events"</Title3>
 
-                <Suspense fallback=move || view! { <Card>"Loading..."</Card> }>
+                <Suspense fallback=move || view! { <Card><EventsTableSkeleton /></Card> }>
                     {move || match events_res.get() {
                         Some(Ok(events)) => {
                             let total = events.len();
@@ -62,7 +64,7 @@ pub fn PhotonEventsIndexPage() -> impl IntoView {
                             }.into_any()
                         }
                         Some(Err(e)) => server_fn_error_bar(&e),
-                        None => view! { <Card>"Loading..."</Card> }.into_any(),
+                        None => view! { <Card><EventsTableSkeleton /></Card> }.into_any(),
                     }}
                 </Suspense>
             </Flex>
