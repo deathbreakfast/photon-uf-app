@@ -12,6 +12,7 @@ use crate::server::{get_subscriptions, SubscriptionSummary};
 /// Subscription index: searchable, filterable list of all subscriptions.
 #[component]
 pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let _navigate = use_navigate();
     let search_query = RwSignal::new(String::new());
     let status_str = RwSignal::new(String::new());

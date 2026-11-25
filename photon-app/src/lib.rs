@@ -210,6 +210,7 @@ use leptos_router::{
 use uf_product_macros::uf_app;
 
 mod components;
+mod hydration;
 mod layout;
 mod lazy_routes;
 /// Page components for the Photon ops UI.

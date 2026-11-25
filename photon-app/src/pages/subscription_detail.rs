@@ -24,6 +24,7 @@ const SUB_EVENT_COLUMNS: EventsTableColumns = EventsTableColumns {
 /// Detail view for a single subscription: configuration, read-state, and recent events.
 #[component]
 pub fn PhotonSubscriptionDetailPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let params = use_params_map();
     let id = move || params.get().get("id").unwrap_or_default();
 

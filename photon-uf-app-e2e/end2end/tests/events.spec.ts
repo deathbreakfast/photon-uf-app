@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { test, expect, seedAuth, waitForHydrated } from "./fixtures";
 
 test.describe("e2e.events", () => {
@@ -34,5 +35,39 @@ test.describe("e2e.events", () => {
     await waitForHydrated(page);
     await expect(page.getByTestId("photon-event-detail")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText("Event not found")).toBeVisible({ timeout: 60_000 });
+  });
+});
+
+// Pages reached by client navigation must call their own server functions instead of
+// reusing resource values the server rendered for the dashboard.
+test.describe("e2e.events.client_nav", () => {
+  async function openDashboard(page: Page) {
+    const seeded = await seedAuth(page, "admin");
+    await page.goto("/photon", { waitUntil: "domcontentloaded" });
+    await waitForHydrated(page);
+    await expect(page.getByTestId("photon-dashboard")).toBeVisible({ timeout: 60_000 });
+    return seeded;
+  }
+
+  test("e2e.events.client_nav_index_fetches_events", async ({ page }) => {
+    await openDashboard(page);
+    const getEvents = page.waitForRequest((req) => /get_events/i.test(req.url()), {
+      timeout: 60_000,
+    });
+    await page.getByTestId("photon-dashboard").getByRole("button", { name: /View All/ }).first().click();
+    await expect(page).toHaveURL(/\/photon\/events$/);
+    await getEvents;
+    await expect(page.getByTestId("photon-events")).toBeVisible({ timeout: 60_000 });
+  });
+
+  test("e2e.events.client_nav_subscription_fetches_events", async ({ page }) => {
+    const seeded = await openDashboard(page);
+    const href = `/photon/subscriptions/${encodeURIComponent(seeded.fixtures.subscription_id)}`;
+    const getEvents = page.waitForRequest((req) => /get_events/i.test(req.url()), {
+      timeout: 60_000,
+    });
+    await page.getByTestId("photon-dashboard").locator(`a[href="${href}"]`).first().click();
+    await expect(page.getByTestId("photon-subscription-detail")).toBeVisible({ timeout: 60_000 });
+    await getEvents;
   });
 });

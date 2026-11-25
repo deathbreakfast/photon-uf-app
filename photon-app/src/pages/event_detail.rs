@@ -10,6 +10,7 @@ use crate::server::get_event;
 /// Detail view for a single event: metadata, payload, and actor context.
 #[component]
 pub fn PhotonEventDetailPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let params = use_params_map();
     let id = move || params.get().get("id").unwrap_or_default();
 
