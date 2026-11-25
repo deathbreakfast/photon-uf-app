@@ -3602,7 +3602,6 @@ name = "photon-app"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "gauge",
  "higgs",
  "icondata",
  "icondata_core",
