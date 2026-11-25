@@ -42,7 +42,6 @@ inventory = { workspace = true, optional = true }
 photon = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 higgs = { workspace = true, optional = true }
-gauge = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -68,8 +67,6 @@ ssr = [
     "dep:chrono",
     "dep:higgs",
     "higgs/ssr",
-    "dep:gauge",
-    "gauge/ssr",
     "dep:uf-product",
     "uf-product/ssr",
     "dep:inventory",
