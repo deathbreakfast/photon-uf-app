@@ -34,9 +34,10 @@ test.describe("e2e.access", () => {
       await expect(page.getByTestId("photon-access-panel")).toBeHidden({ timeout: 60_000 });
       await page.getByRole("tab", { name: "Access" }).click();
       await expect(page.getByTestId("access-card")).toBeVisible({ timeout: 60_000 });
-      await expect(
-        page.getByTestId("access-row").filter({ hasText: "Photon admins" }),
-      ).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByTestId("access-card-error")).toHaveCount(0);
+      await expect(page.getByTestId("access-card-rows")).toContainText("Photon admins", {
+        timeout: 60_000,
+      });
       // Switching back keeps the overview mounted: no skeleton, no reload.
       await page.getByRole("tab", { name: "Overview" }).click();
       await expect(page.getByTestId("photon-overview-panel")).toBeVisible();
@@ -57,7 +58,7 @@ test.describe("e2e.access", () => {
     await expect(page.getByTestId("access-denied")).toHaveCount(0);
 
     await open(page, eventPath(seeded.fixtures.event_id));
-    await expect(page.getByText("Payload")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Payload", { exact: true })).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId("access-denied")).toHaveCount(0);
 
     await open(page, subPath(seeded.fixtures.subscription_id));
@@ -91,7 +92,8 @@ test.describe("e2e.access", () => {
 
     await open(page, eventPath(seeded.fixtures.event_id));
     await expect(page.getByTestId("access-denied")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText("Payload")).toHaveCount(0);
+    // The denied message says "payload" too, so match the card heading exactly.
+    await expect(page.getByText("Payload", { exact: true })).toHaveCount(0);
   });
 
   test("e2e.access.outsider_requests_access", async ({ page }) => {

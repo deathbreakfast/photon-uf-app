@@ -172,10 +172,12 @@ fn ops_reads_drop_resource_gate_sad_path() {
     let server = read_app("server.rs");
     let get_topic = server_fn_body(&server, "get_topic");
     let gate = get_topic.find("require_topic(").expect("get_topic gate");
-    let io = get_topic.find("load_topic(").expect("get_topic IO");
+    let found = get_topic
+        .rfind("Ok(Some(topic))")
+        .expect("get_topic return");
     assert!(
-        gate < io,
-        "get_topic must check View before loading the topic"
+        gate < found,
+        "get_topic must check View before returning the topic"
     );
     let list = server_fn_body(&server, "get_topics");
     assert!(

@@ -287,6 +287,9 @@ pub async fn get_topics() -> Result<Vec<TopicRow>, ServerFnError> {
 }
 
 /// Get a single topic by name. Needs View on the topic.
+///
+/// An unknown name returns `None` before the check: it has no bundle to check against, and the
+/// topics list already shows every name.
 #[uf_product_macros::server]
 pub async fn get_topic(
     /// Name of the topic to look up.
@@ -297,10 +300,14 @@ pub async fn get_topic(
     let photon = photon_from_context()?;
     photon_backend::validate_topic_name(&topic_name)
         .map_err(|e| ServerFnError::new(format!("get topic: {e}")))?;
-    require_topic(&topic_name, "View").await?;
-    photon_backend::ops::load_topic(&photon, &topic_name)
+    let Some(topic) = photon_backend::ops::load_topic(&photon, &topic_name)
         .await
-        .map_err(|e| map_ops_err(&e))
+        .map_err(|e| map_ops_err(&e))?
+    else {
+        return Ok(None);
+    };
+    require_topic(&topic_name, "View").await?;
+    Ok(Some(topic))
 }
 
 /// Get every subscription (handler inventory + checkpoints via `admin_snapshot`) with the
@@ -334,6 +341,8 @@ pub async fn get_subscriptions() -> Result<Vec<SubscriptionRow>, ServerFnError> 
 }
 
 /// Get a single subscription by ID. Needs View on the subscription.
+///
+/// An unknown id returns `None` before the check, as for [`get_topic`].
 #[uf_product_macros::server]
 pub async fn get_subscription(
     /// Unique identifier of the subscription to look up.
@@ -344,10 +353,14 @@ pub async fn get_subscription(
     let photon = photon_from_context()?;
     photon_backend::validate_subscription_id(&id)
         .map_err(|e| ServerFnError::new(format!("get subscription: {e}")))?;
-    require_subscription(&id, "View").await?;
-    photon_backend::ops::load_subscription(&photon, &id)
+    let Some(sub) = photon_backend::ops::load_subscription(&photon, &id)
         .await
-        .map_err(|e| map_ops_err(&e))
+        .map_err(|e| map_ops_err(&e))?
+    else {
+        return Ok(None);
+    };
+    require_subscription(&id, "View").await?;
+    Ok(Some(sub))
 }
 
 /// Get events (recent across all topics, or optionally filter by topic).
