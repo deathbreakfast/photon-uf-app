@@ -52,7 +52,7 @@ test.describe("e2e.events.client_nav", () => {
   test("e2e.events.client_nav_index_fetches_events", async ({ page }) => {
     await openDashboard(page);
     const getEvents = page.waitForRequest((req) => /get_events/i.test(req.url()), {
-      timeout: 60_000,
+      timeout: 20_000,
     });
     await page.getByTestId("photon-dashboard").getByRole("button", { name: /View All/ }).first().click();
     await expect(page).toHaveURL(/\/photon\/events$/);
@@ -64,7 +64,7 @@ test.describe("e2e.events.client_nav", () => {
     const seeded = await openDashboard(page);
     const href = `/photon/subscriptions/${encodeURIComponent(seeded.fixtures.subscription_id)}`;
     const getEvents = page.waitForRequest((req) => /get_events/i.test(req.url()), {
-      timeout: 60_000,
+      timeout: 20_000,
     });
     await page.getByTestId("photon-dashboard").locator(`a[href="${href}"]`).first().click();
     await expect(page.getByTestId("photon-subscription-detail")).toBeVisible({ timeout: 60_000 });
