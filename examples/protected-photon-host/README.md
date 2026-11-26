@@ -5,7 +5,8 @@ Axum oneshot host under **`/photon`**: deny without session, allow with
 for the UI.
 
 Production Leptos hosts mount `PhotonRoutes` at **`/photon`** and gate ops
-reads with `PhotonAdmin`. This example proves the same path + auth + dashboard
+reads per topic and per subscription (View), with the `PhotonAdmin` group as each
+one's default owner. This example proves the same path + auth + dashboard
 contract without the SSR/WASM / Orbital graph. The oneshot path `/photon`
 matches the Orbital app id/path (`photon` / `/photon`).
 
@@ -71,9 +72,11 @@ let stats = dashboard_stats(topic_count, subscription_count, event_count_24h);
 ```
 
 Inventory names match `photon` / `/photon`. Layout uses `RequireAuthenticated`;
-ops `#[server]` fns carry `PhotonAdmin` (manifest
-`permissions::PhotonPermission`). Wire a Photon runtime + session extractors in
-host bootstrap before mounting the routes.
+ops `#[server]` fns check the topic's or subscription's action through
+`uf_product::access::require`. Wire a Photon runtime, session extractors and a
+`ResourceAccessBackend` in host bootstrap, and call
+`permissions::ensure_photon_resource_bundles` as System with the group that holds
+`PhotonAdmin` before mounting the routes.
 
 For shell chrome (layout, fonts, Axum + Leptos boot), copy
 [`shell-chrome-host`](https://github.com/unified-field-dev/unified-field-product/tree/main/examples/shell-chrome-host)

@@ -9,7 +9,7 @@ use crate::components::{
     ActiveSubscriptionsTableSkeleton, EventsTable, EventsTableColumns, EventsTableSkeleton,
     PhotonStatsGrid, StatsGridSkeleton,
 };
-use crate::server::{get_dashboard_stats, get_recent_events, get_subscriptions};
+use crate::server::{get_dashboard_stats, get_recent_events, get_subscriptions, SubscriptionRow};
 
 /// Recent Events columns: topic links to the event, so no Event ID column.
 const RECENT_EVENT_COLUMNS: EventsTableColumns = EventsTableColumns {
@@ -83,11 +83,19 @@ pub fn PhotonDashboardPage() -> impl IntoView {
                     </Space>
                     <Suspense fallback=move || view! { <Card><ActiveSubscriptionsTableSkeleton /></Card> }>
                         {move || match subs_res.get() {
-                            Some(Ok(subs)) => view! {
-                                <Card>
-                                    <ActiveSubscriptionsTable subs=subs />
-                                </Card>
-                            }.into_any(),
+                            Some(Ok(rows)) => {
+                                // Only subscriptions the reader can see; the list page shows the rest.
+                                let subs: Vec<_> = rows
+                                    .into_iter()
+                                    .filter(SubscriptionRow::has_access)
+                                    .map(|row| row.sub)
+                                    .collect();
+                                view! {
+                                    <Card>
+                                        <ActiveSubscriptionsTable subs=subs />
+                                    </Card>
+                                }.into_any()
+                            }
                             Some(Err(e)) => server_fn_error_bar(&e),
                             None => view! { <Card><ActiveSubscriptionsTableSkeleton /></Card> }.into_any(),
                         }}

@@ -7,17 +7,22 @@ use leptos_router::NavigateOptions;
 use orbital::components::{Body1Strong, Caption1, Card, CardButtonArea, CardContent};
 use orbital::primitives::{Flex, FlexGap, MaterialElevation, MaterialVariant};
 
-use crate::components::SubscriptionStatusBadge;
+use crate::components::{AccessBadge, SubscriptionStatusBadge};
+use crate::permissions::NO_ACCESS;
 use crate::server::SubscriptionSummary;
 
-/// Renders a single subscription card with name, status badge, topic, mode,
-/// key filter, checkpoint lag, and last processed time.
+/// Renders a single subscription card with name, status badge, the reader's access, topic,
+/// mode, key filter, checkpoint lag, and last processed time. Without access only the name
+/// and topic show.
 #[component]
 #[allow(clippy::needless_pass_by_value)]
 pub fn SubscriptionCard(
     /// Subscription data to display.
     sub: SubscriptionSummary,
+    /// The reader's role on the subscription ("Owner", "Can run", "No access").
+    access: String,
 ) -> impl IntoView {
+    let has_access = access != NO_ACCESS;
     let navigate = use_navigate();
     let nav_store = StoredValue::new(navigate);
 
@@ -55,13 +60,16 @@ pub fn SubscriptionCard(
                         <Body1Strong block=true>
                             {sub_name}
                             " "
-                            <SubscriptionStatusBadge enabled=en />
+                            {has_access.then(|| view! { <SubscriptionStatusBadge enabled=en /> " " })}
+                            <AccessBadge access=access />
                         </Body1Strong>
                         <Caption1 block=true>"Topic: " {topic}</Caption1>
-                        <Caption1 block=true>"Mode: " {mode}</Caption1>
-                        <Caption1 block=true>"Key filter: " {key_filter}</Caption1>
-                        <Caption1 block=true>"Checkpoint lag: " {lag}</Caption1>
-                        {last_view}
+                        {has_access.then(|| view! {
+                            <Caption1 block=true>"Mode: " {mode}</Caption1>
+                            <Caption1 block=true>"Key filter: " {key_filter}</Caption1>
+                            <Caption1 block=true>"Checkpoint lag: " {lag}</Caption1>
+                            {last_view}
+                        })}
                     </Flex>
                 </CardContent>
             </CardButtonArea>

@@ -44,6 +44,8 @@ static HANDLER_HITS: AtomicUsize = AtomicUsize::new(0);
 pub const E2E_TOPIC_NAME: &str = "test.photon.e2e.ops";
 /// Durable handler name (registry key suffix).
 pub const E2E_HANDLER_NAME: &str = "e2e-ops-handler";
+/// Group that holds `PhotonAdmin`; default owner of every topic and subscription bundle.
+pub const PHOTON_ADMINS_GROUP_ID: &str = "photon.admins";
 
 #[topic(name = "test.photon.e2e.ops")]
 pub struct E2eOpsEvent {
@@ -113,6 +115,9 @@ async fn seed_user(id: &str, email_verified: bool, valence: &Valence) {
 
 async fn seed_super_user_with_member(system: &Valence, member_user_id: &str) {
     let super_group = gauge::generated::PermissionGroup::new(
+        None,
+        None,
+        None,
         SUPER_USER_GROUP_NAME.to_string(),
         Some("super users".to_string()),
         Utc::now(),
@@ -216,6 +221,55 @@ async fn grant_photon_admin(admin_ctx: &Valence, user_id: &str) {
         .expect("grant PhotonAdmin");
 }
 
+/// The host's admin group: holds `PhotonAdmin`, with `admin` as its member.
+async fn seed_photon_admins_group(system: &Valence) {
+    gauge::resource_permissions::ensure_group_granted_permission(
+        system,
+        PHOTON_ADMINS_GROUP_ID,
+        "Photon admins",
+        "People who administer Photon",
+        "PhotonAdmin",
+        &[],
+    )
+    .await
+    .expect("seed Photon admins group");
+    service::add_group_member_user(PHOTON_ADMINS_GROUP_ID, "admin", system)
+        .await
+        .expect("add admin to Photon admins");
+}
+
+/// Bundles for every topic and subscription (as host boot does), then Can view for `viewer`
+/// on the fixture topic and subscription.
+async fn seed_resource_access(system: &Valence, photon: &Photon, fixtures: &FixtureIds) {
+    use gauge::resource_permissions::{roles::Role, set_principal_role};
+    use gauge::types::PrincipalKind;
+    use photon_app::permissions::{
+        ensure_photon_resource_bundles, PHOTON_SUBSCRIPTION, PHOTON_TOPIC,
+    };
+
+    ensure_photon_resource_bundles(system, photon, PHOTON_ADMINS_GROUP_ID)
+        .await
+        .expect("ensure Photon resource bundles");
+    set_principal_role(
+        system,
+        PHOTON_TOPIC,
+        &fixtures.topic_name,
+        (PrincipalKind::User, "viewer"),
+        Role::View,
+    )
+    .await
+    .expect("viewer can view the fixture topic");
+    set_principal_role(
+        system,
+        PHOTON_SUBSCRIPTION,
+        &fixtures.subscription_id,
+        (PrincipalKind::User, "viewer"),
+        Role::View,
+    )
+    .await
+    .expect("viewer can view the fixture subscription");
+}
+
 async fn bootstrap_photon_fixtures(photon: &Photon) -> anyhow::Result<FixtureIds> {
     HANDLER_HITS.store(0, Ordering::SeqCst);
 
@@ -283,6 +337,7 @@ pub async fn init_e2e_valence() {
 
             seed_user("admin", true, &system).await;
             seed_user("outsider", true, &system).await;
+            seed_user("viewer", true, &system).await;
             seed_user("unverified", false, &system).await;
             seed_super_user_with_member(&system, "admin").await;
 
@@ -293,7 +348,7 @@ pub async fn init_e2e_valence() {
             let admin_ctx = system.with_actor(ValenceActor::User {
                 user_id: "admin".to_string(),
             });
-            grant_photon_admin(&admin_ctx, "admin").await;
+            seed_photon_admins_group(&system).await;
             grant_photon_admin(&admin_ctx, "unverified").await;
             demote_admin_from_super_user(&system).await;
 
@@ -309,6 +364,7 @@ pub async fn init_e2e_valence() {
             let fixtures = bootstrap_photon_fixtures(&photon)
                 .await
                 .expect("bootstrap photon fixtures");
+            seed_resource_access(&system, &photon, &fixtures).await;
             let photon = Arc::new(photon);
 
             let factory: Arc<dyn HiggsValenceFactory> =

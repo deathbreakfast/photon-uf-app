@@ -29,7 +29,7 @@ Mapping helpers and ops IO live in `photon-backend`.
 | Server functions | `server.rs` | Higgs `#[server]` wrappers over `photon_backend::ops` |
 | Pages | `pages/` | Dashboard, topics, subscriptions, events |
 | Components | `components/` | Orbital tables, cards, toolbars |
-| Permissions | `permissions.rs` | `PhotonAdmin` manifest |
+| Permissions | `permissions.rs` | `PhotonAdmin` manifest, topic and subscription resource kinds, boot ensure |
 
 ## Develop and verify
 

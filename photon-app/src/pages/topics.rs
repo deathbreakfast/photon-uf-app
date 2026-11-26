@@ -5,9 +5,10 @@ use orbital::primitives::{Flex, FlexGap, Input, InputAppearance};
 
 use crate::components::server_fn_error_bar;
 use crate::components::{ListSkeleton, ListSkeletonKind, TopicCard};
-use crate::server::{get_topics, TopicSummary};
+use crate::server::{get_topics, TopicRow};
 
-/// Topic index: searchable list of all registered topics with traffic summaries.
+/// Topic index: searchable list of all registered topics with traffic summaries and the
+/// reader's access on each ("No access" rows show only the name, so people can ask).
 #[component]
 pub fn PhotonTopicsIndexPage() -> impl IntoView {
     let _navigate = use_navigate();
@@ -15,7 +16,7 @@ pub fn PhotonTopicsIndexPage() -> impl IntoView {
     let topics_res = Resource::new(|| (), |()| async move { get_topics().await });
 
     let filtered = Memo::new(move |_| {
-        let topics: Vec<TopicSummary> = match topics_res.get() {
+        let topics: Vec<TopicRow> = match topics_res.get() {
             Some(Ok(t)) => t,
             _ => return vec![],
         };
@@ -26,9 +27,9 @@ pub fn PhotonTopicsIndexPage() -> impl IntoView {
         } else {
             topics
                 .into_iter()
-                .filter(|t| {
-                    t.topic_name.to_lowercase().contains(q)
-                        || t.schema_json.to_lowercase().contains(q)
+                .filter(|row| {
+                    row.topic.topic_name.to_lowercase().contains(q)
+                        || row.topic.schema_json.to_lowercase().contains(q)
                 })
                 .collect::<Vec<_>>()
         }
@@ -80,10 +81,10 @@ pub fn PhotonTopicsIndexPage() -> impl IntoView {
                                                 <Flex vertical=true gap=FlexGap::Medium>
                                                     <For
                                                         each=move || filtered.get()
-                                                        key=|t| t.topic_name.clone()
-                                                        let:t
+                                                        key=|row| row.topic.topic_name.clone()
+                                                        let:row
                                                     >
-                                                        <TopicCard topic=t />
+                                                        <TopicCard topic=row.topic access=row.access />
                                                     </For>
                                                 </Flex>
                                             }.into_any()

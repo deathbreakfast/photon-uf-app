@@ -3,8 +3,9 @@
 //!
 //! Leptos UI mounted under `/photon` so operators can see what Photon is doing at
 //! runtime without building custom pages. Registers alongside other product apps via
-//! `uf_app!` and requires an authenticated session with `PhotonAdmin` before server
-//! functions load registry or event data.
+//! `uf_app!` and requires an authenticated session before server functions load registry or
+//! event data. Each topic and subscription has its own access (View, Run, Edit, Maintain);
+//! see [`permissions`].
 //!
 //! Orbital inventory macros (`uf_app!`, `orbital_routes_extract`) emit undocumented
 //! associated items, so this crate allows `missing_docs` at the crate root while keeping
@@ -35,8 +36,11 @@
 //! and stored events. Mount during host router setup at startup, alongside other `uf_app!`
 //! product routes — the macro registers launcher metadata and the `/photon` inventory entry.
 //!
-//! **Prerequisites:** `ssr` on this crate; authenticated session; `PhotonAdmin` permission
-//! ([`PHOTON_ADMIN_PERMISSION`]); `Arc<photon::Photon>` in Leptos request context for IO.
+//! **Prerequisites:** `ssr` on this crate; authenticated session; a
+//! `uf_product::access::ResourceAccessBackend` in Leptos request context (without one every
+//! per-resource check fails closed); bundles made at boot with
+//! `permissions::ensure_photon_resource_bundles`, owned by the group that holds
+//! [`PHOTON_ADMIN_PERMISSION`]; `Arc<photon::Photon>` in Leptos request context for IO.
 //!
 //! ```rust,ignore
 //! use leptos::prelude::*;
@@ -94,19 +98,21 @@
 //!
 //! ```rust,ignore
 //! use photon_app::{
-//!     PhotonTopicsIndexPage, get_topics, get_topic, TopicSummary,
+//!     PhotonTopicsIndexPage, get_topics, get_topic, TopicRow,
 //! };
 //!
-//! // PhotonTopicsIndexPage loads get_topics for the index:
-//! let topics: Vec<TopicSummary> = get_topics().await?;
-//! assert_eq!(topics.first().map(|t| t.topic_name.as_str()), Some("orders"));
+//! // PhotonTopicsIndexPage loads get_topics for the index, with the reader's role per row:
+//! let topics: Vec<TopicRow> = get_topics().await?;
+//! assert_eq!(topics.first().map(|t| t.topic.topic_name.as_str()), Some("orders"));
+//! assert_eq!(topics.first().map(|t| t.access.as_str()), Some("Can view"));
 //!
 //! let detail = get_topic("orders".into()).await?;
 //! assert_eq!(detail.topic_name, "orders");
 //! ```
 //!
-//! On success the index returns sorted [`TopicSummary`] rows and detail resolves one topic
-//! or maps a missing name to a server error. Oversized or path-unsafe names fail validation
+//! On success the index returns sorted [`TopicRow`]s (topics the reader holds nothing on carry
+//! only their name and "No access") and detail resolves one topic when the reader has View on
+//! it, or fails with a permission-denied error. Oversized or path-unsafe names fail validation
 //! before registry lookup.
 //!
 //! ## Browse subscriptions
@@ -122,19 +128,19 @@
 //! ```rust,ignore
 //! use photon_app::{
 //!     PhotonSubscriptionsIndexPage, get_subscriptions, get_subscription,
-//!     SubscriptionSummary,
+//!     SubscriptionRow,
 //! };
 //!
-//! // PhotonSubscriptionsIndexPage loads get_subscriptions:
-//! let subs: Vec<SubscriptionSummary> = get_subscriptions().await?;
-//! assert_eq!(subs.first().map(|s| s.subscription_id.as_str()), Some("reg.key"));
+//! // PhotonSubscriptionsIndexPage loads get_subscriptions, with the reader's role per row:
+//! let subs: Vec<SubscriptionRow> = get_subscriptions().await?;
+//! assert_eq!(subs.first().map(|s| s.sub.subscription_id.as_str()), Some("reg.key"));
 //!
 //! let detail = get_subscription("reg.key".into()).await?;
 //! assert_eq!(detail.subscription_id, "reg.key");
 //! ```
 //!
-//! On success the index lists [`SubscriptionSummary`] rows from the admin snapshot and detail
-//! resolves one handler or errors when the id is unknown. Blank or slash-containing ids are
+//! On success the index lists [`SubscriptionRow`]s from the admin snapshot and detail resolves
+//! one handler when the reader has View on it, or errors when the id is unknown or denied. Blank or slash-containing ids are
 //! rejected before lookup.
 //!
 //! ## Browse events
@@ -172,7 +178,8 @@
 //!
 //! ## Routes
 //!
-//! Mounted under `/photon` by [`PhotonRoutes`]. All routes are read-only today.
+//! Mounted under `/photon` by [`PhotonRoutes`]. All routes are read-only today. Topic and
+//! subscription pages have an Access tab with the shared Access card.
 //!
 //! | Path | Page | Key server fn(s) |
 //! |---|---|---|
@@ -194,7 +201,7 @@
 //!
 //! - [`PhotonLayout`] — shared app bar / nav shell wrapping every route.
 //! - [`mod@server`] — server functions and DTOs backing the UI.
-//! - [`permissions::PhotonPermission`] — permission manifest for `PhotonAdmin`.
+//! - [`permissions`] — the `PhotonAdmin` manifest and the topic and subscription resource kinds.
 //! - `photon_backend` — id validation and pure mapping helpers used by these server fns.
 
 #![allow(missing_docs)]
@@ -214,7 +221,7 @@ mod layout;
 mod lazy_routes;
 /// Page components for the Photon ops UI.
 pub mod pages;
-/// Permission manifest for Photon admin server functions.
+/// Permission manifest and per-topic / per-subscription resource kinds.
 pub mod permissions;
 /// SSR server functions and DTOs backing the Photon ops UI.
 pub mod server;
@@ -233,7 +240,7 @@ pub use pages::{
 pub use server::{
     get_dashboard_stats, get_event, get_events, get_recent_events, get_subscription,
     get_subscriptions, get_topic, get_topics, DashboardStats, EventDetail, EventSummary,
-    SubscriptionSummary, TopicSummary, PHOTON_ADMIN_PERMISSION,
+    SubscriptionRow, SubscriptionSummary, TopicRow, TopicSummary, PHOTON_ADMIN_PERMISSION,
 };
 
 uf_app! {

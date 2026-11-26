@@ -9,16 +9,21 @@ use orbital::primitives::{
     Button, ButtonAppearance, ButtonSize, Flex, FlexGap, MaterialElevation, MaterialVariant,
 };
 
+use crate::components::AccessBadge;
+use crate::permissions::NO_ACCESS;
 use crate::server::TopicSummary;
 
-/// Renders a single topic card with name, keyed-by, schema, event/subscription
-/// counts, and action buttons.
+/// Renders a single topic card with name, the reader's access, keyed-by, schema,
+/// event/subscription counts, and action buttons. Without access only the name shows.
 #[component]
 #[allow(clippy::needless_pass_by_value)]
 pub fn TopicCard(
     /// Topic data to display.
     topic: TopicSummary,
+    /// The reader's role on the topic ("Owner", "Can view", "No access").
+    access: String,
 ) -> impl IntoView {
+    let has_access = access != NO_ACCESS;
     let navigate = use_navigate();
     let nav_store = StoredValue::new(navigate);
 
@@ -55,10 +60,16 @@ pub fn TopicCard(
             })>
                 <CardContent>
                     <Flex vertical=true gap=FlexGap::Size(4)>
-                        <Body1Strong block=true>{name.clone()}{if keyed { " KEYED" } else { "" }}</Body1Strong>
-                        {keyed_by_view}
-                        <Caption1 block=true>"Schema: " {schema}</Caption1>
-                        <Caption1 block=true>"Events (24h): " {event_count} " | Subscriptions: " {sub_count}</Caption1>
+                        <Body1Strong block=true>
+                            {name.clone()}{if keyed { " KEYED" } else { "" }}
+                            " "
+                            <AccessBadge access=access />
+                        </Body1Strong>
+                        {has_access.then(|| view! {
+                            {keyed_by_view}
+                            <Caption1 block=true>"Schema: " {schema}</Caption1>
+                            <Caption1 block=true>"Events (24h): " {event_count} " | Subscriptions: " {sub_count}</Caption1>
+                        })}
                     </Flex>
                 </CardContent>
             </CardButtonArea>

@@ -6,9 +6,11 @@ use orbital::components::{
 use orbital::primitives::{Flex, MessageBar, MessageBarIntent};
 
 use crate::components::{
-    server_fn_error_bar, EventsTable, EventsTableColumns, EventsTableSkeleton, LinesCardSkeleton,
-    TopicMetaCard, TopicSubscriptionsTable, TopicSubscriptionsTableSkeleton,
+    server_fn_error_bar, server_fn_error_or_denied, EventsTable, EventsTableColumns,
+    EventsTableSkeleton, LinesCardSkeleton, ResourceTabs, TopicMetaCard, TopicSubscriptionsTable,
+    TopicSubscriptionsTableSkeleton,
 };
+use crate::permissions::{denied_resource, topic_ref};
 use crate::server::{get_events, get_subscriptions, get_topic};
 
 /// Recent events columns: the topic is the page's, so no Topic or Key column.
@@ -32,7 +34,10 @@ fn TopicMetaSkeleton() -> impl IntoView {
     }
 }
 
-/// Detail view for a single topic: schema, subscriptions, and recent events.
+/// Detail view for a single topic: schema, subscriptions, and recent events, with an Access tab.
+///
+/// Without View on the topic, the schema and events give way to the shared denied state with
+/// Request access; the title and the subscriptions list stay.
 #[component]
 pub fn PhotonTopicDetailPage() -> impl IntoView {
     let params = use_params_map();
@@ -49,54 +54,69 @@ pub fn PhotonTopicDetailPage() -> impl IntoView {
             <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
                 <Title3>"Topic: " {move || topic_name()}</Title3>
 
-                <Suspense fallback=move || view! { <TopicMetaSkeleton /> }>
-                    {move || match topic_res.get() {
-                        Some(Ok(Some(t))) => view! {
-                            <TopicMetaCard topic=t />
-                        }.into_any(),
-                        Some(Ok(None)) => view! { <MessageBar intent=MessageBarIntent::Warning>"Topic not found"</MessageBar> }.into_any(),
-                        Some(Err(e)) => server_fn_error_bar(&e),
-                        None => view! { <TopicMetaSkeleton /> }.into_any(),
-                    }}
-                </Suspense>
+                {move || {
+                    let resource = topic_ref(&topic_name());
+                    view! {
+                        <ResourceTabs resource=resource>
+                            <Flex vertical=true gap=SpacingSize::Size240.flex_gap()>
+                                <Suspense fallback=move || view! { <TopicMetaSkeleton /> }>
+                                    {move || match topic_res.get() {
+                                        Some(Ok(Some(t))) => view! {
+                                            <TopicMetaCard topic=t />
+                                        }.into_any(),
+                                        Some(Ok(None)) => view! { <MessageBar intent=MessageBarIntent::Warning>"Topic not found"</MessageBar> }.into_any(),
+                                        Some(Err(e)) => server_fn_error_or_denied(&e, "see this topic's schema and events"),
+                                        None => view! { <TopicMetaSkeleton /> }.into_any(),
+                                    }}
+                                </Suspense>
 
-                <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
-                    <Subtitle2>"Subscriptions for this topic"</Subtitle2>
-                    <Suspense fallback=move || view! { <TopicSubscriptionsTableSkeleton /> }>
-                        {move || {
-                            let name = topic_name();
-                            match subs_res.get() {
-                                Some(Ok(subs)) => {
-                                    let filtered: Vec<_> = subs.iter().filter(|s| s.topic_name == name).cloned().collect();
-                                    view! {
-                                        <TopicSubscriptionsTable subs=filtered />
-                                    }.into_any()
-                                }
-                                _ => view! { <TopicSubscriptionsTableSkeleton /> }.into_any(),
-                            }
-                        }}
-                    </Suspense>
-                </Flex>
+                                <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
+                                    <Subtitle2>"Subscriptions for this topic"</Subtitle2>
+                                    <Suspense fallback=move || view! { <TopicSubscriptionsTableSkeleton /> }>
+                                        {move || {
+                                            let name = topic_name();
+                                            match subs_res.get() {
+                                                Some(Ok(subs)) => {
+                                                    let filtered: Vec<_> = subs
+                                                        .iter()
+                                                        .filter(|row| row.sub.topic_name == name)
+                                                        .map(|row| row.sub.clone())
+                                                        .collect();
+                                                    view! {
+                                                        <TopicSubscriptionsTable subs=filtered />
+                                                    }.into_any()
+                                                }
+                                                _ => view! { <TopicSubscriptionsTableSkeleton /> }.into_any(),
+                                            }
+                                        }}
+                                    </Suspense>
+                                </Flex>
 
-                <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
-                    <Subtitle2>"Recent events"</Subtitle2>
-                    <Suspense fallback=move || view! { <Card><EventsTableSkeleton columns=TOPIC_EVENT_COLUMNS /></Card> }>
-                        {move || {
-                            match events_res.get() {
-                                Some(Ok(events)) => view! {
-                                    <Card>
-                                        <EventsTable
-                                            events=events
-                                            columns=TOPIC_EVENT_COLUMNS
-                                        />
-                                    </Card>
-                                }.into_any(),
-                                Some(Err(e)) => server_fn_error_bar(&e),
-                                None => view! { <Card><EventsTableSkeleton columns=TOPIC_EVENT_COLUMNS /></Card> }.into_any(),
-                            }
-                        }}
-                    </Suspense>
-                </Flex>
+                                <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
+                                    <Subtitle2>"Recent events"</Subtitle2>
+                                    <Suspense fallback=move || view! { <Card><EventsTableSkeleton columns=TOPIC_EVENT_COLUMNS /></Card> }>
+                                        {move || {
+                                            match events_res.get() {
+                                                Some(Ok(events)) => view! {
+                                                    <Card>
+                                                        <EventsTable
+                                                            events=events
+                                                            columns=TOPIC_EVENT_COLUMNS
+                                                        />
+                                                    </Card>
+                                                }.into_any(),
+                                                // The schema card above already shows the denied state.
+                                                Some(Err(e)) if denied_resource(&e.to_string()).is_some() => ().into_any(),
+                                                Some(Err(e)) => server_fn_error_bar(&e),
+                                                None => view! { <Card><EventsTableSkeleton columns=TOPIC_EVENT_COLUMNS /></Card> }.into_any(),
+                                            }
+                                        }}
+                                    </Suspense>
+                                </Flex>
+                            </Flex>
+                        </ResourceTabs>
+                    }
+                }}
             </Flex>
         </ContentContainer>
     }

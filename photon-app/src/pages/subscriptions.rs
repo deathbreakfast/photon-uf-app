@@ -7,9 +7,10 @@ use crate::components::{
     server_fn_error_bar, ListSkeleton, ListSkeletonKind, SubscriptionCard,
     SubscriptionFilterToolbar,
 };
-use crate::server::{get_subscriptions, SubscriptionSummary};
+use crate::server::{get_subscriptions, SubscriptionRow};
 
-/// Subscription index: searchable, filterable list of all subscriptions.
+/// Subscription index: searchable, filterable list of all subscriptions with the reader's
+/// access on each ("No access" rows show only the name and topic, so people can ask).
 #[component]
 pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
     let _navigate = use_navigate();
@@ -19,7 +20,7 @@ pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
     let subs_res = Resource::new(|| (), |()| async move { get_subscriptions().await });
 
     let filtered = Memo::new(move |_| {
-        let subs: Vec<SubscriptionSummary> = match subs_res.get() {
+        let subs: Vec<SubscriptionRow> = match subs_res.get() {
             Some(Ok(s)) => s,
             _ => return vec![],
         };
@@ -30,7 +31,8 @@ pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
             _ => None,
         };
         subs.into_iter()
-            .filter(|s| {
+            .filter(|row| {
+                let s = &row.sub;
                 let matches_search = q.is_empty()
                     || s.subscription_name.to_lowercase().contains(&q)
                     || s.topic_name.to_lowercase().contains(&q);
@@ -81,10 +83,10 @@ pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
                                                 <Flex vertical=true gap=FlexGap::Medium>
                                                     <For
                                                         each=move || filtered.get()
-                                                        key=|s| s.subscription_id.clone()
-                                                        let:s
+                                                        key=|row| row.sub.subscription_id.clone()
+                                                        let:row
                                                     >
-                                                        <SubscriptionCard sub=s />
+                                                        <SubscriptionCard sub=row.sub access=row.access />
                                                     </For>
                                                 </Flex>
                                             }.into_any()
