@@ -221,7 +221,7 @@ async fn grant_photon_admin(admin_ctx: &Valence, user_id: &str) {
         .expect("grant PhotonAdmin");
 }
 
-/// The host's admin group: holds `PhotonAdmin`, with `admin` as its member.
+/// The host's admin group: holds `PhotonAdmin`, with `admin` as member and owner.
 async fn seed_photon_admins_group(system: &Valence) {
     gauge::resource_permissions::ensure_group_granted_permission(
         system,
@@ -236,6 +236,10 @@ async fn seed_photon_admins_group(system: &Valence) {
     service::add_group_member_user(PHOTON_ADMINS_GROUP_ID, "admin", system)
         .await
         .expect("add admin to Photon admins");
+    // Gauge lets owners (not members) of the admin group manage each bundle's access.
+    service::add_group_owner_user(PHOTON_ADMINS_GROUP_ID, "admin", system)
+        .await
+        .expect("make admin an owner of Photon admins");
 }
 
 /// Bundles for every topic and subscription (as host boot does, as System), then Can view for
