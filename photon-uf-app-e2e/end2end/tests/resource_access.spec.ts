@@ -33,7 +33,10 @@ test.describe("e2e.access", () => {
       await open(page, path);
       await expect(page.getByTestId("photon-access-panel")).toBeHidden({ timeout: 60_000 });
       await page.getByRole("tab", { name: "Access" }).click();
-      await expect(page.getByTestId("access-card")).toBeVisible({ timeout: 60_000 });
+      // The card's stylesheet carries the same test id, so pick the card element itself.
+      const card = page.getByTestId("photon-access-panel").getByRole("group").first();
+      await expect(card).toHaveAttribute("data-testid", "access-card", { timeout: 60_000 });
+      await expect(card).toBeVisible();
       await expect(page.getByTestId("access-card-error")).toHaveCount(0);
       await expect(page.getByTestId("access-card-rows")).toContainText("Photon admins", {
         timeout: 60_000,
