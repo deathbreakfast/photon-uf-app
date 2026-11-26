@@ -35,6 +35,7 @@ fn TopicMetaSkeleton() -> impl IntoView {
 /// Detail view for a single topic: schema, subscriptions, and recent events.
 #[component]
 pub fn PhotonTopicDetailPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let params = use_params_map();
     let topic_name = move || params.get().get("topic_name").unwrap_or_default();
 

@@ -10,6 +10,7 @@ use crate::server::{get_topics, TopicSummary};
 /// Topic index: searchable list of all registered topics with traffic summaries.
 #[component]
 pub fn PhotonTopicsIndexPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let _navigate = use_navigate();
     let search_query = RwSignal::new(String::new());
     let topics_res = Resource::new(|| (), |()| async move { get_topics().await });

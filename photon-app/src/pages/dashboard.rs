@@ -23,6 +23,7 @@ const RECENT_EVENT_COLUMNS: EventsTableColumns = EventsTableColumns {
 /// Photon dashboard: aggregate stats, recent events, and active subscriptions at a glance.
 #[component]
 pub fn PhotonDashboardPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let navigate = use_navigate();
     let nav_events = navigate.clone();
     let nav_subs = navigate.clone();
