@@ -238,9 +238,15 @@ async fn seed_photon_admins_group(system: &Valence) {
         .expect("add admin to Photon admins");
 }
 
-/// Bundles for every topic and subscription (as host boot does), then Can view for `viewer`
-/// on the fixture topic and subscription.
-async fn seed_resource_access(system: &Valence, photon: &Photon, fixtures: &FixtureIds) {
+/// Bundles for every topic and subscription (as host boot does, as System), then Can view for
+/// `viewer` on the fixture topic and subscription, granted by `owner` (a member of the admin
+/// group) the way an owner does it from the Access card.
+async fn seed_resource_access(
+    system: &Valence,
+    owner: &Valence,
+    photon: &Photon,
+    fixtures: &FixtureIds,
+) {
     use gauge::resource_permissions::{roles::Role, set_principal_role};
     use gauge::types::PrincipalKind;
     use photon_app::permissions::{
@@ -251,7 +257,7 @@ async fn seed_resource_access(system: &Valence, photon: &Photon, fixtures: &Fixt
         .await
         .expect("ensure Photon resource bundles");
     set_principal_role(
-        system,
+        owner,
         PHOTON_TOPIC,
         &fixtures.topic_name,
         (PrincipalKind::User, "viewer"),
@@ -260,7 +266,7 @@ async fn seed_resource_access(system: &Valence, photon: &Photon, fixtures: &Fixt
     .await
     .expect("viewer can view the fixture topic");
     set_principal_role(
-        system,
+        owner,
         PHOTON_SUBSCRIPTION,
         &fixtures.subscription_id,
         (PrincipalKind::User, "viewer"),
@@ -364,7 +370,7 @@ pub async fn init_e2e_valence() {
             let fixtures = bootstrap_photon_fixtures(&photon)
                 .await
                 .expect("bootstrap photon fixtures");
-            seed_resource_access(&system, &photon, &fixtures).await;
+            seed_resource_access(&system, &admin_ctx, &photon, &fixtures).await;
             let photon = Arc::new(photon);
 
             let factory: Arc<dyn HiggsValenceFactory> =
