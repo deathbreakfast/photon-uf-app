@@ -9,6 +9,10 @@ const topicPath = (name: string) => `/photon/topics/${encodeURIComponent(name)}`
 const subPath = (id: string) => `/photon/subscriptions/${encodeURIComponent(id)}`;
 const eventPath = (id: string) => `/photon/events/${encodeURIComponent(id)}`;
 
+/** Orbital components put their test id on an injected `<style>` too; skip that copy. */
+const byTestId = (page: Page, id: string) =>
+  page.locator(`[data-testid="${id}"]:not(style)`);
+
 test.describe("e2e.access", () => {
   test("e2e.access.admin_owns_every_resource", async ({ page }) => {
     const seeded = await seedAuth(page, "admin");
@@ -33,12 +37,9 @@ test.describe("e2e.access", () => {
       await open(page, path);
       await expect(page.getByTestId("photon-access-panel")).toBeHidden({ timeout: 60_000 });
       await page.getByRole("tab", { name: "Access" }).click();
-      // The card's stylesheet carries the same test id, so pick the card element itself.
-      const card = page.getByTestId("photon-access-panel").getByRole("group").first();
-      await expect(card).toHaveAttribute("data-testid", "access-card", { timeout: 60_000 });
-      await expect(card).toBeVisible();
-      await expect(page.getByTestId("access-card-error")).toHaveCount(0);
-      await expect(page.getByTestId("access-card-rows")).toContainText("Photon admins", {
+      await expect(byTestId(page, "access-card")).toBeVisible({ timeout: 60_000 });
+      await expect(byTestId(page, "access-card-error")).toHaveCount(0);
+      await expect(byTestId(page, "access-card-rows")).toContainText("Photon admins", {
         timeout: 60_000,
       });
       // Switching back keeps the overview mounted: no skeleton, no reload.
