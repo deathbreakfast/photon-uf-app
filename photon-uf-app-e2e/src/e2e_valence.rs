@@ -35,6 +35,12 @@ pub struct FixtureIds {
     pub topic_name: String,
     pub subscription_id: String,
     pub event_id: String,
+    /// Handler that never finishes an event, so it reads as Stalled.
+    pub stalled_subscription_id: String,
+    /// Handler that fails every event, so it reads as Failing.
+    pub failing_subscription_id: String,
+    /// Handler paused at boot with events waiting, for Skip.
+    pub backlog_subscription_id: String,
 }
 
 static E2E_STATE: OnceCell<Arc<E2eState>> = OnceCell::const_new();
@@ -56,6 +62,71 @@ pub struct E2eOpsEvent {
 async fn on_e2e_ops(_actor: Box<dyn Actor>, event: E2eOpsEvent) -> photon::Result<()> {
     assert_eq!(event.value, 42);
     HANDLER_HITS.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Topic whose handler parks on every event and never returns.
+pub const E2E_STALL_TOPIC: &str = "test.photon.e2e.stall";
+/// Topic whose handler fails every event.
+pub const E2E_FAIL_TOPIC: &str = "test.photon.e2e.fail";
+/// Topic whose handler is paused at boot.
+pub const E2E_BACKLOG_TOPIC: &str = "test.photon.e2e.backlog";
+/// How long events wait with nothing handled before the e2e host calls a subscription
+/// Stalled (Photon's default is five minutes).
+pub const E2E_STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Never notified: the stalled handler waits on it forever.
+static STALL_GATE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[topic(name = "test.photon.e2e.stall")]
+pub struct E2eStallEvent {
+    pub n: u32,
+}
+
+#[subscribe(topic = "test.photon.e2e.stall", durable = "e2e-stalled")]
+async fn on_e2e_stall(_actor: Box<dyn Actor>, _event: E2eStallEvent) -> photon::Result<()> {
+    STALL_GATE.notified().await;
+    Ok(())
+}
+
+#[topic(name = "test.photon.e2e.fail")]
+pub struct E2eFailEvent {
+    pub n: u32,
+}
+
+#[subscribe(topic = "test.photon.e2e.fail", durable = "e2e-failing")]
+async fn on_e2e_fail(_actor: Box<dyn Actor>, event: E2eFailEvent) -> photon::Result<()> {
+    Err(photon::PhotonError::Internal(format!(
+        "SMTP relay refused the connection (fixture event {})",
+        event.n
+    )))
+}
+
+#[topic(name = "test.photon.e2e.backlog")]
+pub struct E2eBacklogEvent {
+    pub n: u32,
+}
+
+#[subscribe(topic = "test.photon.e2e.backlog", durable = "e2e-backlog")]
+async fn on_e2e_backlog(_actor: Box<dyn Actor>, _event: E2eBacklogEvent) -> photon::Result<()> {
+    Ok(())
+}
+
+/// Publish `count` events to one fixture topic (`ops`, `stall`, `fail` or `backlog`).
+///
+/// # Errors
+///
+/// An unknown topic, or a publish failure.
+pub async fn publish_fixture_events(topic: &str, count: u32) -> anyhow::Result<()> {
+    for n in 0..count {
+        match topic {
+            "ops" => E2eOpsEvent { value: 42 }.publish().await?,
+            "stall" => E2eStallEvent { n }.publish().await?,
+            "fail" => E2eFailEvent { n }.publish().await?,
+            "backlog" => E2eBacklogEvent { n }.publish().await?,
+            other => anyhow::bail!("unknown fixture topic `{other}`"),
+        };
+    }
     Ok(())
 }
 
@@ -278,6 +349,15 @@ async fn seed_resource_access(
     )
     .await
     .expect("viewer can view the fixture subscription");
+    set_principal_role(
+        owner,
+        PHOTON_SUBSCRIPTION,
+        &fixtures.stalled_subscription_id,
+        (PrincipalKind::User, "viewer"),
+        Role::View,
+    )
+    .await
+    .expect("viewer can view the stalled subscription");
 }
 
 async fn bootstrap_photon_fixtures(photon: &Photon) -> anyhow::Result<FixtureIds> {
@@ -305,10 +385,28 @@ async fn bootstrap_photon_fixtures(photon: &Photon) -> anyhow::Result<FixtureIds
         .map(|e| e.event_id.clone())
         .ok_or_else(|| anyhow::anyhow!("published event missing from recent list"))?;
 
+    // Stalled: three events, the first parks forever. Failing: two events, each dead-lettered.
+    // Backlog: paused first, then three events wait.
+    let backlog_subscription_id = format!("{E2E_BACKLOG_TOPIC}:e2e-backlog");
+    photon.pause(&backlog_subscription_id, "fixture").await?;
+    publish_fixture_events("stall", 3).await?;
+    publish_fixture_events("fail", 2).await?;
+    publish_fixture_events("backlog", 3).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    photon
+        .runtime()
+        .executor_services
+        .checkpoint_coalescer
+        .flush()
+        .await?;
+
     Ok(FixtureIds {
         topic_name: E2E_TOPIC_NAME.into(),
         subscription_id: format!("{E2E_TOPIC_NAME}:{E2E_HANDLER_NAME}"),
         event_id,
+        stalled_subscription_id: format!("{E2E_STALL_TOPIC}:e2e-stalled"),
+        failing_subscription_id: format!("{E2E_FAIL_TOPIC}:e2e-failing"),
+        backlog_subscription_id,
     })
 }
 

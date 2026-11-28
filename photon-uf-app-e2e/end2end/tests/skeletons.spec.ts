@@ -48,10 +48,15 @@ test.describe("e2e.skeletons", () => {
     await dash.getByRole("button", { name: /View All/ }).nth(1).click();
     const subs = page.getByTestId("photon-subscriptions");
     await expect(subs).toBeVisible({ timeout: 30_000 });
-    await expect(subs.getByTestId("photon-list-skeleton")).toBeVisible();
+    // Skeleton rows under the real headers; the search and Health filter stay.
+    const skeleton = subs.getByTestId("photon-subscriptions-skeleton");
+    await expect(skeleton).toBeVisible();
+    await expect(skeleton.locator('[data-testid="data-table-skeleton-row"]').first()).toBeVisible();
+    await expect(skeleton.getByText("Health", { exact: true }).first()).toBeVisible();
+    await expect(skeleton.getByTestId("photon-health-filter")).toBeVisible();
 
     release();
-    await expect(subs.getByTestId("photon-list-skeleton")).toHaveCount(0, { timeout: 30_000 });
+    await expect(skeleton).toHaveCount(0, { timeout: 30_000 });
     await expect(subs.getByText(seeded.fixtures.topic_name).first()).toBeVisible();
     await expectShellKept(page);
   });
@@ -73,12 +78,11 @@ test.describe("e2e.skeletons", () => {
     const metaSkeleton = detail.getByTestId("photon-subscription-meta-skeleton");
     await expect(metaSkeleton).toBeVisible();
     await expect(metaSkeleton.getByText("Details")).toBeVisible();
-    await expect(metaSkeleton.getByText("Checkpoint lag")).toBeVisible();
-    // The events card header renders while the subscription loads. (Its table skeleton
-    // isn't asserted: after client navigation the events table can resolve without a
-    // client fetch, so there's nothing to hold. e2e.skeletons.events_table covers it.)
-    const events = detail.getByTestId("photon-subscription-events");
-    await expect(events.getByText("Recent events on this topic")).toBeVisible();
+    await expect(metaSkeleton.getByText("Lag", { exact: true })).toBeVisible();
+    // The Health and Waiting events cards keep their headings while the subscription loads.
+    const health = detail.getByTestId("photon-subscription-health-skeleton");
+    await expect(health.getByText("Health", { exact: true })).toBeVisible();
+    await expect(detail.getByText("Waiting events", { exact: true }).first()).toBeVisible();
     // Until the subscription loads, the title is the id from the URL.
     await expect(detail.getByText(subId, { exact: true }).first()).toBeVisible();
 
@@ -86,7 +90,11 @@ test.describe("e2e.skeletons", () => {
     const meta = detail.getByTestId("photon-subscription-meta");
     await expect(meta).toBeVisible({ timeout: 30_000 });
     await expect(meta.getByText(subId)).toBeVisible();
-    await expect(meta.getByRole("link", { name: seeded.fixtures.topic_name })).toBeVisible();
+    await expect(
+      detail
+        .getByTestId("photon-subscription-caption")
+        .getByRole("link", { name: seeded.fixtures.topic_name }),
+    ).toBeVisible();
     await expectShellKept(page);
   });
 

@@ -22,10 +22,12 @@ test.describe("e2e.access", () => {
       timeout: 60_000,
     });
 
+    // Every subscription row shows its health, not "No access".
     await open(page, "/photon/subscriptions");
-    await expect(page.getByTestId("photon-your-access").first()).toHaveText("Owner", {
+    await expect(byTestId(page, "photon-health-badge").first()).toBeVisible({
       timeout: 60_000,
     });
+    await expect(page.getByTestId("photon-subscriptions-no-access")).toHaveCount(0);
   });
 
   test("e2e.access.access_tab_shows_default_owner", async ({ page }) => {

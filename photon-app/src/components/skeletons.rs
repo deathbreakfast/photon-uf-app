@@ -122,8 +122,6 @@ pub fn StatsGridSkeleton() -> impl IntoView {
 pub enum ListSkeletonKind {
     /// `TopicCard`: name, schema line, counts line.
     Topics,
-    /// `SubscriptionCard`: name and badge, then four caption lines.
-    Subscriptions,
 }
 
 impl ListSkeletonKind {
@@ -134,18 +132,11 @@ impl ListSkeletonKind {
                 ("70%", SkeletonItemSize::S12),
                 ("180px", SkeletonItemSize::S12),
             ],
-            Self::Subscriptions => vec![
-                ("180px", SkeletonItemSize::S20),
-                ("140px", SkeletonItemSize::S12),
-                ("110px", SkeletonItemSize::S12),
-                ("120px", SkeletonItemSize::S12),
-                ("130px", SkeletonItemSize::S12),
-            ],
         }
     }
 }
 
-/// Loading state for the topics and subscriptions lists: three card-shaped
+/// Loading state for the topics list: three card-shaped
 /// placeholders inside the list's `Card`.
 #[component]
 pub fn ListSkeleton(

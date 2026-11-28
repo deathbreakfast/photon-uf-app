@@ -140,18 +140,24 @@ mod types;
 mod validate;
 
 pub use mapping::{
-    compute_checkpoint_lag, count_since, dashboard_stats, event_detail_from_transport,
-    event_detail_transport_expired, event_summary_from_meta, event_summary_from_transport,
-    filter_subscriptions_by_topic, find_checkpoint_head_seq, find_checkpoint_seq,
-    find_subscription_by_id, find_topic_by_name, format_delivery_preview, sort_topics_by_name,
-    subscription_summary_from_handler, topic_summary, CheckpointRow,
+    aggregate_checkpoints, clock_words, compute_checkpoint_lag, count_since, dashboard_stats,
+    derive_health, duration_words, event_detail_from_transport, event_detail_transport_expired,
+    event_summary_from_meta, event_summary_from_transport, filter_subscriptions_by_topic,
+    find_checkpoint_head_seq, find_checkpoint_seq, find_subscription_by_id, find_topic_by_name,
+    format_delivery_preview, lag_words, long_duration_words, sort_topics_by_name, sort_worst_first,
+    subscription_summary_from_handler, subscription_summary_from_snapshot, time_words,
+    topic_summary, waiting_text, CheckpointAggregate, CheckpointRow, CheckpointState,
+    HandlerSnapshot, HealthInputs, DEFAULT_STALL_AFTER,
 };
 pub use types::{
-    DashboardStats, EventDetail, EventSummary, PhotonIdError, SubscriptionSummary, TopicSummary,
+    DashboardStats, EventDetail, EventSummary, PausedBy, PhotonIdError, ReplayPoint,
+    ReplayPreviewSummary, RetryingEvent, SubscriptionHealth, SubscriptionSummary, TopicSummary,
+    WaitingEvents,
 };
 pub use validate::{
-    clamp_event_list_limit, encode_ops_path_segment, photon_event_path, photon_subscription_path,
-    photon_topic_path, validate_event_id, validate_subscription_id, validate_topic_name,
+    clamp_event_list_limit, clamp_waiting_limit, confirm_name_matches, encode_ops_path_segment,
+    photon_event_path, photon_subscription_path, photon_topic_path, validate_event_id,
+    validate_replay_point, validate_subscription_id, validate_topic_name, ReplayPointError,
     MAX_EVENT_LIST_LIMIT, MAX_PHOTON_ID_CHARS,
 };
 
@@ -181,6 +187,7 @@ mod tests {
             checkpoint_lag: 0,
             last_seq: None,
             last_processed_at: None,
+            ..SubscriptionSummary::default()
         }
     }
 

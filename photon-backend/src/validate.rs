@@ -140,3 +140,124 @@ pub fn photon_subscription_path(subscription_id: &str) -> String {
 pub fn photon_event_path(event_id: &str) -> String {
     format!("/photon/events/{}", encode_ops_path_segment(event_id))
 }
+
+/// Cap a waiting-events request to [`MAX_EVENT_LIST_LIMIT`], with at least one row.
+#[must_use]
+pub fn clamp_waiting_limit(limit: u32) -> usize {
+    limit.clamp(1, MAX_EVENT_LIST_LIMIT) as usize
+}
+
+/// A replay start point the Replay dialog can't use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReplayPointError {
+    /// The sequence number was negative.
+    NegativeSeq,
+    /// The time was not an RFC 3339 timestamp.
+    InvalidTime,
+    /// The time is in the future, so nothing would replay.
+    FutureTime,
+    /// The event id failed validation.
+    Event(PhotonIdError),
+}
+
+impl std::fmt::Display for ReplayPointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NegativeSeq => write!(f, "Replay sequence number can't be negative"),
+            Self::InvalidTime => write!(f, "Replay time must be a date and a UTC time"),
+            Self::FutureTime => write!(f, "Replay time is in the future"),
+            Self::Event(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ReplayPointError {}
+
+/// Checks a replay start point and returns the time as UTC when it is one.
+///
+/// # Errors
+///
+/// [`ReplayPointError`] for a negative seq, an unparsable or future time, or a bad event id.
+pub fn validate_replay_point(
+    point: &crate::ReplayPoint,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, ReplayPointError> {
+    match point {
+        crate::ReplayPoint::AfterSeq(seq) if *seq < 0 => Err(ReplayPointError::NegativeSeq),
+        crate::ReplayPoint::AfterSeq(_) => Ok(None),
+        crate::ReplayPoint::Time(raw) => {
+            let at = chrono::DateTime::parse_from_rfc3339(raw.trim())
+                .map_err(|_| ReplayPointError::InvalidTime)?
+                .with_timezone(&chrono::Utc);
+            if at > now {
+                return Err(ReplayPointError::FutureTime);
+            }
+            Ok(Some(at))
+        }
+        crate::ReplayPoint::Event(id) => validate_event_id(id)
+            .map(|()| None)
+            .map_err(ReplayPointError::Event),
+    }
+}
+
+/// Whether the name typed into the Skip dialog matches the subscription's name exactly
+/// (surrounding spaces ignored).
+#[must_use]
+pub fn confirm_name_matches(typed: &str, subscription_name: &str) -> bool {
+    !subscription_name.is_empty() && typed.trim() == subscription_name
+}
+
+#[cfg(test)]
+mod action_input_tests {
+    use super::*;
+    use crate::ReplayPoint;
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-11-28T08:20:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn waiting_limit_is_clamped() {
+        assert_eq!(clamp_waiting_limit(0), 1);
+        assert_eq!(clamp_waiting_limit(20), 20);
+        assert_eq!(clamp_waiting_limit(10_000), MAX_EVENT_LIST_LIMIT as usize);
+    }
+
+    #[test]
+    fn replay_points_validate() {
+        assert_eq!(
+            validate_replay_point(&ReplayPoint::AfterSeq(40), now()),
+            Ok(None)
+        );
+        assert_eq!(
+            validate_replay_point(&ReplayPoint::AfterSeq(-1), now()),
+            Err(ReplayPointError::NegativeSeq)
+        );
+        assert!(matches!(
+            validate_replay_point(&ReplayPoint::Time("2026-11-28T07:30:00Z".into()), now()),
+            Ok(Some(_))
+        ));
+        assert_eq!(
+            validate_replay_point(&ReplayPoint::Time("07:30".into()), now()),
+            Err(ReplayPointError::InvalidTime)
+        );
+        assert_eq!(
+            validate_replay_point(&ReplayPoint::Time("2026-11-29T07:30:00Z".into()), now()),
+            Err(ReplayPointError::FutureTime)
+        );
+        assert_eq!(
+            validate_replay_point(&ReplayPoint::Event("  ".into()), now()),
+            Err(ReplayPointError::Event(PhotonIdError::EmptyEventId))
+        );
+    }
+
+    #[test]
+    fn skip_confirm_needs_the_exact_name() {
+        assert!(confirm_name_matches(" warehouse ", "warehouse"));
+        assert!(!confirm_name_matches("Warehouse", "warehouse"));
+        assert!(!confirm_name_matches("", ""));
+    }
+}

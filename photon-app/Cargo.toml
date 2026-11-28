@@ -40,7 +40,7 @@ uf-product = { workspace = true, default-features = false, optional = true }
 inventory = { workspace = true, optional = true }
 
 photon = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
+chrono = { workspace = true }
 higgs = { workspace = true, optional = true }
 gauge = { workspace = true, default-features = false, optional = true }
 valence = { workspace = true, optional = true }
@@ -66,7 +66,6 @@ ssr = [
     "photon/runtime",
     "photon/mem",
     "photon-backend/ops",
-    "dep:chrono",
     "dep:higgs",
     "higgs/ssr",
     "dep:uf-product",

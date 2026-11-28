@@ -16,7 +16,9 @@
 //! - The topic and subscription lists show every resource with the reader's role
 //!   ("No access" where nothing); a No access row carries only its name and topic.
 //! - Run and Edit checks for actions go through [`require_topic`] and
-//!   [`require_subscription`]. Hosts without an access backend fail closed.
+//!   [`require_subscription`]. Hosts without an access backend fail closed. Subscription
+//!   actions check the subscription: Run for replay and retry now, Edit for pause, resume
+//!   and skip to latest. Photon records the session user as `by` with each action.
 //! - Catalog, subscription, and event reads come from Photon (`admin_snapshot`,
 //!   registry, `list_*`, `get_event`).
 //! - Path/query ids are rejected when blank, oversized, or containing `/` `\`,
@@ -33,7 +35,8 @@
 
 use leptos::prelude::*;
 pub use photon_backend::{
-    DashboardStats, EventDetail, EventSummary, SubscriptionSummary, TopicSummary,
+    DashboardStats, EventDetail, EventSummary, ReplayPreviewSummary, SubscriptionHealth,
+    SubscriptionSummary, TopicSummary, WaitingEvents,
 };
 
 /// App-wide admin permission name
@@ -57,7 +60,18 @@ pub struct SubscriptionRow {
     pub sub: SubscriptionSummary,
     /// The reader's role: Owner, Can edit, Can run, Can view, or No access.
     pub access: String,
+    /// The team that owns it: its first owner other than the default admin group, else
+    /// [`crate::permissions::DEFAULT_OWNER_LABEL`].
+    pub owner: String,
+    /// Every owner, for "ask an owner" lines.
+    pub owners: Vec<String>,
 }
+
+/// How long events may wait with nothing handled before a subscription reads as Stalled.
+///
+/// Hosts may provide this as Leptos context; without it Photon uses five minutes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StallAfter(pub std::time::Duration);
 
 impl TopicRow {
     /// Whether the reader holds anything on this topic.
@@ -72,6 +86,50 @@ impl SubscriptionRow {
     #[must_use]
     pub fn has_access(&self) -> bool {
         self.access != crate::permissions::NO_ACCESS
+    }
+
+    /// Whether the reader may replay it or retry now (Run).
+    #[must_use]
+    pub fn can_run(&self) -> bool {
+        matches!(self.access.as_str(), "Owner" | "Can edit" | "Can run")
+    }
+
+    /// Whether the reader may pause, resume or skip it (Edit).
+    #[must_use]
+    pub fn can_edit(&self) -> bool {
+        matches!(self.access.as_str(), "Owner" | "Can edit")
+    }
+}
+
+/// Picks the owner shown on a subscription from its owner rows (`(label, default_owner)`).
+#[must_use]
+pub fn owner_label(owners: &[(String, bool)]) -> String {
+    owners
+        .iter()
+        .find(|(_, default_owner)| !default_owner)
+        .or_else(|| owners.first())
+        .map_or_else(
+            || crate::permissions::DEFAULT_OWNER_LABEL.to_string(),
+            |(label, _)| label.clone(),
+        )
+}
+
+/// Parses the Replay dialog's choice: `seq` (start after that seq), `time` (RFC 3339) or
+/// `event` (an event id).
+///
+/// # Errors
+///
+/// An error naming the field when `kind` is unknown or the seq isn't a number.
+pub fn replay_point(kind: &str, value: &str) -> Result<photon_backend::ReplayPoint, String> {
+    let value = value.trim();
+    match kind {
+        "seq" => value
+            .parse::<i64>()
+            .map(photon_backend::ReplayPoint::AfterSeq)
+            .map_err(|_| "Replay sequence number must be a whole number".to_string()),
+        "time" => Ok(photon_backend::ReplayPoint::Time(value.to_string())),
+        "event" => Ok(photon_backend::ReplayPoint::Event(value.to_string())),
+        _ => Err(format!("Unknown replay start `{kind}`")),
     }
 }
 
@@ -94,12 +152,7 @@ pub fn redact_subscription(sub: SubscriptionSummary) -> SubscriptionSummary {
         subscription_id: sub.subscription_id,
         subscription_name: sub.subscription_name,
         topic_name: sub.topic_name,
-        enabled: false,
-        mode: String::new(),
-        topic_key_filter: None,
-        checkpoint_lag: 0,
-        last_seq: None,
-        last_processed_at: None,
+        ..SubscriptionSummary::default()
     }
 }
 
@@ -212,6 +265,94 @@ fn require_session(ctx: &higgs::Higgs) -> Result<(), ServerFnError> {
         .map_err(|e| map_ops_err(&e))
 }
 
+/// The label Photon records as `by` for an action: the session user.
+#[cfg(feature = "ssr")]
+fn actor_label(ctx: &higgs::Higgs) -> Result<String, ServerFnError> {
+    require_session(ctx)?;
+    Ok(ctx.session_user_id().map_or_else(String::new, |id| {
+        id.strip_prefix("user:").unwrap_or(id).to_string()
+    }))
+}
+
+/// The stall threshold from [`StallAfter`] context, else five minutes.
+#[cfg(feature = "ssr")]
+fn stall_after() -> chrono::Duration {
+    leptos::context::use_context::<StallAfter>()
+        .and_then(|s| chrono::Duration::from_std(s.0).ok())
+        .unwrap_or(photon_backend::DEFAULT_STALL_AFTER)
+}
+
+/// Owner labels of one resource as `(label, default_owner)`; empty when the backend can't
+/// say (none wired, or the reader may not read its access).
+#[cfg(feature = "ssr")]
+async fn resource_owners(
+    backend: Option<&std::sync::Arc<dyn uf_product::access::ResourceAccessBackend>>,
+    resource: &uf_product::access::ResourceRef,
+) -> Vec<(String, bool)> {
+    let Some(backend) = backend else {
+        return Vec::new();
+    };
+    match backend.access(resource).await {
+        Ok(view) => view
+            .entries
+            .into_iter()
+            .filter(|e| e.role == uf_product::access::Role::Owner)
+            .map(|e| (e.principal.label, e.default_owner))
+            .collect(),
+        Err(e) => {
+            leptos::logging::warn!(
+                "photon owner lookup failed kind={} id={}: {e}",
+                resource.kind,
+                resource.id
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// One subscription as a row: the reader's role, owners, and read state unless No access.
+#[cfg(feature = "ssr")]
+async fn subscription_row(
+    backend: Option<&std::sync::Arc<dyn uf_product::access::ResourceAccessBackend>>,
+    sub: SubscriptionSummary,
+) -> SubscriptionRow {
+    let resource = crate::permissions::subscription_ref(&sub.subscription_id);
+    let access = reader_access(backend, &resource, true).await;
+    let owner_rows = resource_owners(backend, &resource).await;
+    let mut owners: Vec<String> = owner_rows.iter().map(|(l, _)| l.clone()).collect();
+    if owners.is_empty() {
+        owners.push(crate::permissions::DEFAULT_OWNER_LABEL.to_string());
+    }
+    let sub = if access == crate::permissions::NO_ACCESS {
+        redact_subscription(sub)
+    } else {
+        sub
+    };
+    SubscriptionRow {
+        sub,
+        access: access.to_string(),
+        owner: owner_label(&owner_rows),
+        owners,
+    }
+}
+
+/// Loads a subscription for an action, failing when the id names none.
+#[cfg(feature = "ssr")]
+async fn action_target(
+    photon: &photon::Photon,
+    id: &str,
+    action: &str,
+) -> Result<SubscriptionSummary, ServerFnError> {
+    photon_backend::validate_subscription_id(id)
+        .map_err(|e| ServerFnError::new(format!("{action} subscription: {e}")))?;
+    let sub =
+        photon_backend::ops::load_subscription_at(photon, id, chrono::Utc::now(), stall_after())
+            .await
+            .map_err(|e| map_ops_err(&e))?
+            .ok_or_else(|| map_ops_err(&photon_backend::ops::OpsError::SubscriptionNotFound))?;
+    Ok(sub)
+}
+
 // ============================================================================
 // Server functions (SSR only)
 // ============================================================================
@@ -319,48 +460,175 @@ pub async fn get_subscriptions() -> Result<Vec<SubscriptionRow>, ServerFnError> 
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
-    let subs = photon_backend::ops::list_subscriptions(&photon)
-        .await
-        .map_err(|e| map_ops_err(&e))?;
+    let mut subs =
+        photon_backend::ops::list_subscriptions_at(&photon, chrono::Utc::now(), stall_after())
+            .await
+            .map_err(|e| map_ops_err(&e))?;
+    photon_backend::sort_worst_first(&mut subs);
     let backend = uf_product::access::use_resource_access_backend();
     let mut rows = Vec::with_capacity(subs.len());
     for sub in subs {
-        let resource = crate::permissions::subscription_ref(&sub.subscription_id);
-        let access = reader_access(backend.as_ref(), &resource, true).await;
-        let sub = if access == crate::permissions::NO_ACCESS {
-            redact_subscription(sub)
-        } else {
-            sub
-        };
-        rows.push(SubscriptionRow {
-            sub,
-            access: access.to_string(),
-        });
+        rows.push(subscription_row(backend.as_ref(), sub).await);
     }
     Ok(rows)
 }
 
-/// Get a single subscription by ID. Needs View on the subscription.
+/// Get a single subscription by ID, with the reader's role and its owners. Needs View on
+/// the subscription.
 ///
 /// An unknown id returns `None` before the check, as for [`get_topic`].
 #[uf_product_macros::server]
 pub async fn get_subscription(
     /// Unique identifier of the subscription to look up.
     id: String,
-) -> Result<Option<SubscriptionSummary>, ServerFnError> {
+) -> Result<Option<SubscriptionRow>, ServerFnError> {
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
     photon_backend::validate_subscription_id(&id)
         .map_err(|e| ServerFnError::new(format!("get subscription: {e}")))?;
-    let Some(sub) = photon_backend::ops::load_subscription(&photon, &id)
-        .await
-        .map_err(|e| map_ops_err(&e))?
+    let Some(sub) =
+        photon_backend::ops::load_subscription_at(&photon, &id, chrono::Utc::now(), stall_after())
+            .await
+            .map_err(|e| map_ops_err(&e))?
     else {
         return Ok(None);
     };
     require_subscription(&id, "View").await?;
-    Ok(Some(sub))
+    let backend = uf_product::access::use_resource_access_backend();
+    Ok(Some(subscription_row(backend.as_ref(), sub).await))
+}
+
+/// The events a subscription still owes, oldest first, with the total waiting. Needs View
+/// on the subscription.
+#[uf_product_macros::server]
+pub async fn get_waiting_events(
+    /// Subscription id.
+    subscription_id: String,
+    /// Most events to return (capped at [`photon_backend::MAX_EVENT_LIST_LIMIT`]).
+    limit: u32,
+) -> Result<WaitingEvents, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    require_session(&ctx)?;
+    let photon = photon_from_context()?;
+    photon_backend::validate_subscription_id(&subscription_id)
+        .map_err(|e| ServerFnError::new(format!("get waiting events: {e}")))?;
+    require_subscription(&subscription_id, "View").await?;
+    photon_backend::ops::load_waiting_events(&photon, &subscription_id, limit)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// Pause a subscription: Photon stops dispatching to it until someone resumes it. Needs
+/// Edit on the subscription.
+#[uf_product_macros::server]
+pub async fn pause_subscription(
+    /// Subscription id.
+    subscription_id: String,
+) -> Result<(), ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    let by = actor_label(&ctx)?;
+    let photon = photon_from_context()?;
+    action_target(&photon, &subscription_id, "pause").await?;
+    require_subscription(&subscription_id, "Edit").await?;
+    photon_backend::ops::pause_subscription(&photon, &subscription_id, &by)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// Resume a paused subscription from its checkpoint. Needs Edit on the subscription.
+#[uf_product_macros::server]
+pub async fn resume_subscription(
+    /// Subscription id.
+    subscription_id: String,
+) -> Result<(), ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    let by = actor_label(&ctx)?;
+    let photon = photon_from_context()?;
+    action_target(&photon, &subscription_id, "resume").await?;
+    require_subscription(&subscription_id, "Edit").await?;
+    photon_backend::ops::resume_subscription(&photon, &subscription_id, &by)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// Move a subscription's checkpoint to the newest event, dropping what waits; returns how
+/// many events were skipped. Needs Edit on the subscription.
+#[uf_product_macros::server]
+pub async fn skip_subscription_to_latest(
+    /// Subscription id.
+    subscription_id: String,
+) -> Result<u64, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    let by = actor_label(&ctx)?;
+    let photon = photon_from_context()?;
+    action_target(&photon, &subscription_id, "skip").await?;
+    require_subscription(&subscription_id, "Edit").await?;
+    photon_backend::ops::skip_subscription_to_latest(&photon, &subscription_id, &by)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// What a replay from `from_kind`/`from_value` would resend, without moving anything.
+/// Needs Run on the subscription.
+///
+/// `from_kind` is `seq` (start after that sequence number), `time` (RFC 3339) or `event`.
+#[uf_product_macros::server]
+pub async fn replay_preview(
+    /// Subscription id.
+    subscription_id: String,
+    /// `seq`, `time` or `event`.
+    from_kind: String,
+    /// The sequence number, RFC 3339 time or event id.
+    from_value: String,
+) -> Result<ReplayPreviewSummary, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    require_session(&ctx)?;
+    let photon = photon_from_context()?;
+    let point = replay_point(&from_kind, &from_value).map_err(ServerFnError::new)?;
+    action_target(&photon, &subscription_id, "replay").await?;
+    require_subscription(&subscription_id, "Run").await?;
+    photon_backend::ops::replay_preview(&photon, &subscription_id, &point)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// Replay a subscription from a point: its checkpoint moves back and it handles those
+/// events again. Needs Run on the subscription.
+#[uf_product_macros::server]
+pub async fn replay_subscription(
+    /// Subscription id.
+    subscription_id: String,
+    /// `seq`, `time` or `event`.
+    from_kind: String,
+    /// The sequence number, RFC 3339 time or event id.
+    from_value: String,
+) -> Result<ReplayPreviewSummary, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    let by = actor_label(&ctx)?;
+    let photon = photon_from_context()?;
+    let point = replay_point(&from_kind, &from_value).map_err(ServerFnError::new)?;
+    action_target(&photon, &subscription_id, "replay").await?;
+    require_subscription(&subscription_id, "Run").await?;
+    photon_backend::ops::replay_subscription(&photon, &subscription_id, &point, &by)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// Retry the failing event now instead of waiting for its backoff. Needs Run on the
+/// subscription.
+#[uf_product_macros::server]
+pub async fn retry_subscription_now(
+    /// Subscription id.
+    subscription_id: String,
+) -> Result<(), ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    let by = actor_label(&ctx)?;
+    let photon = photon_from_context()?;
+    action_target(&photon, &subscription_id, "retry").await?;
+    require_subscription(&subscription_id, "Run").await?;
+    photon_backend::ops::retry_subscription_now(&photon, &subscription_id, &by)
+        .map_err(|e| map_ops_err(&e))
 }
 
 /// Get events (recent across all topics, or optionally filter by topic).
@@ -450,6 +718,11 @@ mod tests {
             checkpoint_lag: 7,
             last_seq: Some(40),
             last_processed_at: Some("2026-11-25T00:00:00Z".into()),
+            health: SubscriptionHealth::Failing,
+            waiting: 7,
+            failures_24h: 3,
+            last_error: Some("smtp refused".into()),
+            ..SubscriptionSummary::default()
         };
         let redacted = redact_subscription(sub);
         assert_eq!(redacted.subscription_id, "orders.created:billing");
@@ -460,6 +733,47 @@ mod tests {
         assert_eq!(redacted.topic_key_filter, None);
         assert_eq!((redacted.checkpoint_lag, redacted.last_seq), (0, None));
         assert_eq!(redacted.last_processed_at, None);
+        assert_eq!(redacted.health, SubscriptionHealth::NotStarted);
+        assert_eq!((redacted.waiting, redacted.failures_24h), (0, 0));
+        assert_eq!(redacted.last_error, None);
+    }
+
+    #[test]
+    fn owner_prefers_a_team_over_the_admin_group() {
+        assert_eq!(owner_label(&[]), crate::permissions::DEFAULT_OWNER_LABEL);
+        assert_eq!(
+            owner_label(&[("Photon admins".into(), true), ("Warehouse".into(), false)]),
+            "Warehouse"
+        );
+        assert_eq!(owner_label(&[("Admins".into(), true)]), "Admins");
+    }
+
+    #[test]
+    fn roles_decide_actions() {
+        let row = |access: &str| SubscriptionRow {
+            sub: SubscriptionSummary::default(),
+            access: access.into(),
+            owner: String::new(),
+            owners: vec![],
+        };
+        assert!(row("Owner").can_edit() && row("Owner").can_run());
+        assert!(row("Can edit").can_edit() && row("Can edit").can_run());
+        assert!(!row("Can run").can_edit() && row("Can run").can_run());
+        assert!(!row("Can view").can_edit() && !row("Can view").can_run());
+    }
+
+    #[test]
+    fn replay_points_parse() {
+        assert_eq!(
+            replay_point("seq", " 40 "),
+            Ok(photon_backend::ReplayPoint::AfterSeq(40))
+        );
+        assert!(replay_point("seq", "forty").is_err());
+        assert_eq!(
+            replay_point("event", "ev-1"),
+            Ok(photon_backend::ReplayPoint::Event("ev-1".into()))
+        );
+        assert!(replay_point("bogus", "1").is_err());
     }
 
     #[test]

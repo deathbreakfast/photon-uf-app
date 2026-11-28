@@ -8,7 +8,16 @@ export type SeedFixtures = {
   topic_name: string;
   subscription_id: string;
   event_id: string;
+  stalled_subscription_id: string;
+  failing_subscription_id: string;
+  backlog_subscription_id: string;
 };
+
+/** Publish fixture events (`ops`, `stall`, `fail` or `backlog`) so a test sets up its own counts. */
+export async function publishEvents(page: Page, topic: string, count: number) {
+  const res = await page.request.post("/api/test/publish", { data: { topic, count } });
+  expect(res.ok()).toBeTruthy();
+}
 
 export async function seedAuth(page: Page, auth: SeedAuthKind) {
   const res = await page.request.post("/api/test/seed-data", {
