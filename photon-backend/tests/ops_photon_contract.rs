@@ -359,7 +359,13 @@ async fn integ_events_list_detail_and_unknown_sad() {
     let photon = shared_photon().await;
     let recent = load_recent_events(&photon, 50).await.expect("recent");
     assert_ne!(recent.len(), 0);
-    let event_id = recent[0].event_id.clone();
+    // Other tests publish orders too; take the newest event on this test's topic.
+    let event_id = recent
+        .iter()
+        .find(|e| e.topic_name == TOPIC)
+        .expect("seeded event in recent")
+        .event_id
+        .clone();
 
     let by_topic = load_events(&photon, Some(TOPIC), 50)
         .await
