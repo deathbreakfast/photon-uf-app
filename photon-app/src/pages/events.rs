@@ -11,6 +11,7 @@ use crate::server::{get_events, get_topics, TopicRow};
 /// Event index: filterable, paginated list of events across all topics.
 #[component]
 pub fn PhotonEventsIndexPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let _navigate = use_navigate();
     let topic_filter = RwSignal::new(Option::<String>::None);
     let topic_str = RwSignal::new(String::new());

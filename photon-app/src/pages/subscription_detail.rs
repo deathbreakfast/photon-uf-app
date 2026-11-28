@@ -29,6 +29,7 @@ const SUB_EVENT_COLUMNS: EventsTableColumns = EventsTableColumns {
 /// Request access. The recent events need View on the subscription's topic.
 #[component]
 pub fn PhotonSubscriptionDetailPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let params = use_params_map();
     let id = move || params.get().get("id").unwrap_or_default();
 

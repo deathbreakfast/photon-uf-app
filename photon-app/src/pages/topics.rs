@@ -11,6 +11,7 @@ use crate::server::{get_topics, TopicRow};
 /// reader's access on each ("No access" rows show only the name, so people can ask).
 #[component]
 pub fn PhotonTopicsIndexPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let _navigate = use_navigate();
     let search_query = RwSignal::new(String::new());
     let topics_res = Resource::new(|| (), |()| async move { get_topics().await });

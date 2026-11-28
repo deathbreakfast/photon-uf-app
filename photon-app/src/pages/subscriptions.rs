@@ -13,6 +13,7 @@ use crate::server::{get_subscriptions, SubscriptionRow};
 /// access on each ("No access" rows show only the name and topic, so people can ask).
 #[component]
 pub fn PhotonSubscriptionsIndexPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let _navigate = use_navigate();
     let search_query = RwSignal::new(String::new());
     let status_str = RwSignal::new(String::new());

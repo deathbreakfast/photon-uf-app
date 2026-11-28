@@ -40,6 +40,7 @@ fn TopicMetaSkeleton() -> impl IntoView {
 /// Request access; the title and the subscriptions list stay.
 #[component]
 pub fn PhotonTopicDetailPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let params = use_params_map();
     let topic_name = move || params.get().get("topic_name").unwrap_or_default();
 

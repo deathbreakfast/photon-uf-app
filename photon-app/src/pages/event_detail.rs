@@ -12,6 +12,7 @@ use crate::server::get_event;
 /// Needs View on the event's topic; without it the page shows the shared denied state.
 #[component]
 pub fn PhotonEventDetailPage() -> impl IntoView {
+    crate::hydration::forget_server_resources();
     let params = use_params_map();
     let id = move || params.get().get("id").unwrap_or_default();
 
