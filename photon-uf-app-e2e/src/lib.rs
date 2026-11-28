@@ -1,6 +1,8 @@
 //! Photon ops UI Playwright host.
 #![allow(missing_docs)]
 
+#[cfg(feature = "ssr")]
+mod access_backend;
 mod app;
 #[cfg(feature = "ssr")]
 mod e2e_valence;

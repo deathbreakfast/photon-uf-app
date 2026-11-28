@@ -6,7 +6,7 @@ use orbital::primitives::Flex;
 use crate::components::{
     server_fn_error_bar, EventFilterToolbar, EventsTable, EventsTableSkeleton,
 };
-use crate::server::{get_events, get_topics};
+use crate::server::{get_events, get_topics, TopicRow};
 
 /// Event index: filterable, paginated list of events across all topics.
 #[component]
@@ -43,7 +43,15 @@ pub fn PhotonEventsIndexPage() -> impl IntoView {
                     {move || match events_res.get() {
                         Some(Ok(events)) => {
                             let total = events.len();
-                            let topics: Vec<_> = topics_res.get().and_then(Result::ok).unwrap_or_default();
+                            // Only topics the reader can View; the list shows only their events.
+                            let topics: Vec<_> = topics_res
+                                .get()
+                                .and_then(Result::ok)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(TopicRow::has_access)
+                                .map(|row| row.topic)
+                                .collect();
                             view! {
                                 <Flex vertical=true gap=SpacingSize::Size160.flex_gap()>
                                     <EventFilterToolbar topic_str=topic_str topics=topics />

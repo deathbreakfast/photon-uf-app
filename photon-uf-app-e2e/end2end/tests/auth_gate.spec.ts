@@ -17,13 +17,10 @@ test.describe("e2e.auth", () => {
     await waitForHydrated(page);
     await expect(page.getByTestId("photon-app-root")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId("photon-dashboard")).toBeVisible({ timeout: 60_000 });
-    // Authenticated without PhotonAdmin: server fns fail with a permission error that
-    // goes to the shell toast bus, so each section shows soft copy and the KPI grid
-    // never loads.
-    await expect(page.getByText("Couldn't load this section.").first()).toBeVisible({
-      timeout: 60_000,
-    });
-    await expect(page.getByText("Events (24h)")).toHaveCount(0);
+    // Authenticated with no access to any topic: the dashboard loads, and its recent
+    // events and subscriptions are empty because they list only what the reader can view.
+    await expect(page.getByText("Events (24h)").first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Couldn't load this section.")).toHaveCount(0);
   });
 
   test("e2e.auth.admin_dashboard", async ({ page }) => {

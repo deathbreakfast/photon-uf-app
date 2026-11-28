@@ -1,6 +1,8 @@
 import { test as base, expect, type Page } from "@playwright/test";
 
-export type SeedAuthKind = "anonymous" | "admin" | "outsider" | "unverified";
+export type { Page };
+
+export type SeedAuthKind = "anonymous" | "admin" | "outsider" | "unverified" | "viewer";
 
 export type SeedFixtures = {
   topic_name: string;

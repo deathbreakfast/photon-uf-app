@@ -30,7 +30,8 @@ cargo test -p photon-uf-app-e2e --features ssr --test boundary_contract
 | ID | Asserts |
 |----|---------|
 | `e2e.auth.anonymous_gate` | Anon gated; no dashboard |
-| `e2e.auth.no_admin` | Outsider authenticated; PhotonAdmin reads denied |
+| `e2e.auth.no_admin` | Outsider authenticated; dashboard loads with nothing they can view |
+| `e2e.access.*` | Your access in lists; Access tab; viewer inspects events; outsider denied and requests access |
 | `e2e.auth.admin_dashboard` / `e2e.dashboard.load_happy` | Admin sees KPIs and seeded topic |
 | `e2e.topics.*` | Index→detail; unknown topic |
 | `e2e.subs.*` | Index→detail; unknown subscription |

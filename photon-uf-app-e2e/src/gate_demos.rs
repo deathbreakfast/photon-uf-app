@@ -14,6 +14,8 @@ pub const E2E_ADMIN_USER: &str = "user:admin";
 pub const E2E_OUTSIDER_USER: &str = "user:outsider";
 #[cfg(feature = "ssr")]
 pub const E2E_UNVERIFIED_USER: &str = "user:unverified";
+#[cfg(feature = "ssr")]
+pub const E2E_VIEWER_USER: &str = "user:viewer";
 
 /// Session kinds for Playwright seed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +28,8 @@ pub enum E2eAuthKind {
     Outsider,
     /// Authenticated but email unverified (holds PhotonAdmin for server-fn sad paths).
     Unverified,
+    /// Verified user with Can view on the fixture topic and subscription only.
+    Viewer,
 }
 
 impl E2eAuthKind {
@@ -35,6 +39,7 @@ impl E2eAuthKind {
             Self::Admin => "admin",
             Self::Outsider => "outsider",
             Self::Unverified => "unverified",
+            Self::Viewer => "viewer",
         }
     }
 
@@ -43,6 +48,7 @@ impl E2eAuthKind {
             "admin" | "authenticated_verified" => Self::Admin,
             "outsider" => Self::Outsider,
             "unverified" | "authenticated_unverified" => Self::Unverified,
+            "viewer" => Self::Viewer,
             _ => Self::Anonymous,
         }
     }
@@ -54,6 +60,7 @@ impl E2eAuthKind {
             Self::Admin => Some(E2E_ADMIN_USER),
             Self::Outsider => Some(E2E_OUTSIDER_USER),
             Self::Unverified => Some(E2E_UNVERIFIED_USER),
+            Self::Viewer => Some(E2E_VIEWER_USER),
         }
     }
 
@@ -83,6 +90,14 @@ impl E2eAuthKind {
                 avatar_url: None,
                 roles: vec!["user".into()],
                 email_verified: false,
+            }),
+            Self::Viewer => AuthSession::Authenticated(AuthenticatedUser {
+                user_id: "viewer".into(),
+                email: Some("viewer@example.com".into()),
+                display_name: Some("Viewer".into()),
+                avatar_url: None,
+                roles: vec!["user".into()],
+                email_verified: true,
             }),
         }
     }

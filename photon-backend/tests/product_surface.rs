@@ -119,25 +119,47 @@ fn layout_missing_nav_sad_path() {
     }
 }
 
+/// Body of one server fn: from its signature to the next `#[uf_product_macros::server`.
+fn server_fn_body<'a>(server: &'a str, name: &str) -> &'a str {
+    let start = server
+        .find(&format!("pub async fn {name}("))
+        .unwrap_or_else(|| panic!("server missing `{name}`"));
+    let rest = &server[start..];
+    let end = rest[1..]
+        .find("#[uf_product_macros::server")
+        .map_or(rest.len(), |i| i + 1);
+    &rest[..end]
+}
+
 #[test]
-fn ops_reads_require_photon_admin_happy_path() {
+fn ops_reads_gate_per_resource_happy_path() {
     let server = read_app("server.rs");
-    for fn_name in [
-        "get_dashboard_stats",
-        "get_recent_events",
-        "get_topics",
-        "get_topic",
-        "get_subscriptions",
-        "get_subscription",
-        "get_events",
-        "get_event",
+    for (fn_name, gate) in [
+        ("get_topic", r#"require_topic(&topic_name, "View")"#),
+        ("get_subscription", r#"require_subscription(&id, "View")"#),
+        ("get_events", r#"require_topic(topic, "View")"#),
+        ("get_event", r#"require_topic(&event.topic_name, "View")"#),
     ] {
-        assert!(server.contains(fn_name), "server missing `{fn_name}`");
+        assert!(
+            server_fn_body(&server, fn_name).contains(gate),
+            "`{fn_name}` must check `{gate}` as the session actor"
+        );
     }
-    let admin_attr = r#"permission = "PhotonAdmin""#;
+    for fn_name in ["get_dashboard_stats", "get_recent_events", "get_events"] {
+        assert!(
+            server_fn_body(&server, fn_name).contains("viewable_topics(&photon)"),
+            "`{fn_name}` must keep only topics the reader can View"
+        );
+    }
+    for fn_name in ["get_topics", "get_subscriptions"] {
+        assert!(
+            server_fn_body(&server, fn_name).contains("reader_access("),
+            "`{fn_name}` must report the reader's role per row"
+        );
+    }
     assert!(
-        server.matches(admin_attr).count() >= 8,
-        "ops read server fns must carry PhotonAdmin permission attribute"
+        server.contains("uf_product::access::require("),
+        "per-resource gates must go through uf_product::access::require"
     );
     assert!(
         server.contains("PHOTON_ADMIN_PERMISSION: &str = \"PhotonAdmin\""),
@@ -146,12 +168,25 @@ fn ops_reads_require_photon_admin_happy_path() {
 }
 
 #[test]
-fn ops_reads_drop_photon_admin_sad_path() {
+fn ops_reads_drop_resource_gate_sad_path() {
     let server = read_app("server.rs");
-    let admin_attr = r#"permission = "PhotonAdmin""#;
+    let get_topic = server_fn_body(&server, "get_topic");
+    let gate = get_topic.find("require_topic(").expect("get_topic gate");
+    let found = get_topic
+        .rfind("Ok(Some(topic))")
+        .expect("get_topic return");
     assert!(
-        server.matches(admin_attr).count() >= 8,
-        "dropping PhotonAdmin from any get_* opens ops reads without admin gate"
+        gate < found,
+        "get_topic must check View before returning the topic"
+    );
+    let list = server_fn_body(&server, "get_topics");
+    assert!(
+        list.contains("redact_topic("),
+        "topics the reader can't access must come back with only their name"
+    );
+    assert!(
+        server_fn_body(&server, "get_subscriptions").contains("redact_subscription("),
+        "subscriptions the reader can't access must come back without read state"
     );
     assert!(
         !server.contains(r#"permission = "GaugeAdmin""#),
@@ -320,6 +355,9 @@ fn permission_manifest_photon_admin_happy_path() {
         "domain_key = \"photon\"",
         "PhotonAdmin",
         "UfPermissionManifest",
+        "PHOTON_TOPIC_KIND: &str = \"photon_topic\"",
+        "PHOTON_SUBSCRIPTION_KIND: &str = \"photon_subscription\"",
+        "ensure_photon_resource_bundles",
     ] {
         assert!(
             perms.contains(needle),
