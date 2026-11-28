@@ -78,7 +78,8 @@ const E2E_SEARCH_ORDERS: usize = 3;
 /// Key of the order whose payload is trimmed.
 const E2E_EXPIRED_KEY: &str = "ord-expired";
 
-#[topic(name = "test.photon.e2e.orders", keyed_by = "order_id")]
+// Not `keyed_by`: each publish passes its key explicitly, which is all the specs need.
+#[topic(name = "test.photon.e2e.orders")]
 pub struct E2eOrderPlaced {
     pub order_id: String,
     #[photon(personal)]

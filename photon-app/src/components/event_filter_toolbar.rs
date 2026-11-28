@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use orbital::components::Body1;
 use orbital::primitives::{
-    DatePicker, Field, Flex, FlexAlign, FlexGap, FlexWrap, SearchBox, Select,
+    DatePicker, Field, Flex, FlexAlign, FlexGap, FlexWrap, SearchBox, SearchBoxAppearance, Select,
 };
 use orbital_base_components::OrbitalDateTime;
 
@@ -57,8 +57,8 @@ pub fn EventFilterToolbar(
                     on_search.run(());
                 }
             >
-                <Field label="Search" label_hidden=true>
-                    <SearchBox bind=filters.search attr:placeholder="Event id or key" attr:aria-label="Event id or key" />
+                <Field label="Event id or key" label_hidden=true>
+                    <SearchBox bind=filters.search appearance=SearchBoxAppearance::with_placeholder("Event id or key") />
                 </Field>
             </form>
             {show_topic.then(|| view! {

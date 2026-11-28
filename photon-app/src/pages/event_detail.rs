@@ -124,7 +124,9 @@ pub fn PhotonEventDetailPage() -> impl IntoView {
                 </Breadcrumb>
 
                 <Flex wrap=FlexWrap::Wrap gap=FlexGap::Medium align=FlexAlign::Center>
-                    <Title3>"Event " {move || id.get()}</Title3>
+                    <div data-testid="photon-event-title">
+                        <Title3>"Event " {move || id.get()}</Title3>
+                    </div>
                     <CopyButton text=Signal::derive(move || id.get()) label="Copy" />
                 </Flex>
 

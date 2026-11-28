@@ -312,7 +312,11 @@ pub async fn load_events_page(
                 .first()
                 .map(|r| r.topic_name.clone())
         });
-        if known_topic.as_deref().is_some_and(visible) {
+        // Any viewable topic: an exact id opens whatever the topic filter says.
+        if known_topic
+            .as_deref()
+            .is_some_and(|name| topics.iter().any(|t| t == name))
+        {
             return Ok(empty(Some(q.to_string())));
         }
     }

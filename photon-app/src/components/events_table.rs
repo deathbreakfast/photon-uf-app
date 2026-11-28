@@ -118,7 +118,6 @@ pub fn EventsBrowser(
     let page_sig = RwSignal::new(initial.page.max(1) as usize);
 
     let commit = {
-        let navigate = navigate.clone();
         move |update: &dyn Fn(&mut EventsQuery)| {
             let current = query.get_untracked();
             let mut next = current.clone();
@@ -210,11 +209,16 @@ pub fn EventsBrowser(
         });
     });
 
-    // Topic names for the select load in the browser only, so the toolbar renders at once
-    // and never waits or remounts. The current topic is always listed.
-    let topics_res = LocalResource::new(|| async move { get_topics().await });
+    // Topic names for the select load in the browser through an action, not a resource, so
+    // no Suspense (the page's included) waits on them and the toolbar never remounts. The
+    // current topic is always listed.
+    let load_topics = Action::new(|(): &()| async move { get_topics().await });
+    Effect::new(move |_| {
+        load_topics.dispatch(());
+    });
     let topics = Signal::derive(move || {
-        let mut names: Vec<String> = topics_res
+        let mut names: Vec<String> = load_topics
+            .value()
             .get()
             .and_then(Result::ok)
             .unwrap_or_default()
@@ -235,21 +239,6 @@ pub fn EventsBrowser(
         |q| async move { get_events_page(q).await },
     );
 
-    // An exact event id opens the event; replace so Back returns to the search before it.
-    Effect::new(move |_| {
-        if let Some(Ok(page)) = events_res.get() {
-            if let Some(id) = page.exact_id {
-                navigate(
-                    &photon_backend::photon_event_path(&id),
-                    NavigateOptions {
-                        replace: true,
-                        ..NavigateOptions::default()
-                    },
-                );
-            }
-        }
-    });
-
     let show_topic = fixed_topic.get_value().is_none();
     let skeleton = move || view! { <TableSkeleton columns=BROWSER_COLUMNS.to_vec() /> };
 
@@ -258,9 +247,7 @@ pub fn EventsBrowser(
             <EventFilterToolbar filters=filters topics=topics show_topic=show_topic on_search=on_search />
             <Suspense fallback=skeleton>
                 {move || events_res.get().map(|res| match res {
-                    Ok(page) if page.exact_id.is_some() => view! {
-                        <Body1 block=true>"Opening the event\u{2026}"</Body1>
-                    }.into_any(),
+                    Ok(EventsPage { exact_id: Some(id), .. }) => view! { <OpenEvent id=id /> }.into_any(),
                     Ok(page) if page.rows.is_empty() => {
                         let q = query.get_untracked();
                         events_empty_state(&q, Callback::new(move |()| run_commit(&|q| {
@@ -287,6 +274,30 @@ pub fn EventsBrowser(
                 })}
             </Suspense>
         </Flex>
+    }
+}
+
+/// An exact event id: open the event. Replace the history entry so Back returns to the
+/// search before it.
+#[component]
+fn OpenEvent(
+    /// Event to open.
+    id: String,
+) -> impl IntoView {
+    let navigate = use_navigate();
+    let href = photon_backend::photon_event_path(&id);
+    let target = href.clone();
+    Effect::new(move |_| {
+        navigate(
+            &target,
+            NavigateOptions {
+                replace: true,
+                ..NavigateOptions::default()
+            },
+        );
+    });
+    view! {
+        <Body1 block=true>"Opening " <Link href=href>{id}</Link> "\u{2026}"</Body1>
     }
 }
 

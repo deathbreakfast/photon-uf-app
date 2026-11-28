@@ -10,7 +10,7 @@ test.describe("e2e.events", () => {
     await expect(events).toBeVisible({ timeout: 60_000 });
     // Topic also appears as a hidden <option>; assert the table cell instead.
     await expect(
-      events.getByRole("gridcell", { name: seeded.fixtures.topic_name }).first(),
+      events.getByTestId("photon-events-table").getByText(seeded.fixtures.topic_name, { exact: true }).first(),
     ).toBeVisible({ timeout: 60_000 });
   });
 

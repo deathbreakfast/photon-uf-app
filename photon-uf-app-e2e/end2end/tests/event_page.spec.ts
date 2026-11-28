@@ -21,7 +21,7 @@ test.describe("e2e.event_page", () => {
   test("e2e.event_page.delivery_rows", async ({ page }) => {
     const { fixtures } = await seedAuth(page, "admin");
     await openEvent(page, fixtures.order_event_id);
-    await expect(page.getByRole("heading", { name: `Event ${fixtures.order_event_id}` })).toBeVisible();
+    await expect(byTestId(page, "photon-event-title")).toContainText(`Event ${fixtures.order_event_id}`);
     const handled = byTestId(page, "photon-delivery-send-confirmation");
     await expect(handled).toHaveAttribute("data-state", "Handled", { timeout: 60_000 });
     const waiting = byTestId(page, "photon-delivery-warehouse");
@@ -38,13 +38,15 @@ test.describe("e2e.event_page", () => {
 
   test("e2e.event_page.personal_fields_masked_in_server_html", async ({ page }) => {
     const { fixtures } = await seedAuth(page, "viewer");
-    const res = await page.request.get(eventPath(fixtures.order_event_id));
-    expect(res.ok()).toBeTruthy();
-    const html = await res.text();
+    // The document the server sent, before any hydration or reveal.
+    const res = await page.goto(eventPath(fixtures.order_event_id), { waitUntil: "domcontentloaded" });
+    expect(res, "navigation response").toBeTruthy();
+    expect(res!.status(), "event page status").toBeLessThan(400);
+    const html = await res!.text();
     expect(html).toContain("photon-event-payload");
     expect(html).not.toContain("customer1@example.com");
     expect(html).not.toContain('"ines"');
-    await openEvent(page, fixtures.order_event_id);
+    await waitForHydrated(page);
     const email = byTestId(page, "photon-payload-field-customer_email");
     await expect(email.getByText("Personal")).toBeVisible({ timeout: 60_000 });
     await expect(email).not.toContainText("@example.com");
