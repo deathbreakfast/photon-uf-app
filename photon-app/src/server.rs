@@ -486,12 +486,14 @@ pub async fn get_topic(
 /// Subscriptions the reader holds nothing on come back with only their id, name and topic.
 #[uf_product_macros::server]
 pub async fn get_subscriptions() -> Result<Vec<SubscriptionRow>, ServerFnError> {
+    // Read context before the first await: during SSR it can be gone later.
+    let stall_after = stall_after();
     let request = RequestContexts::capture();
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
     let mut subs =
-        photon_backend::ops::list_subscriptions_at(&photon, chrono::Utc::now(), stall_after())
+        photon_backend::ops::list_subscriptions_at(&photon, chrono::Utc::now(), stall_after)
             .await
             .map_err(|e| map_ops_err(&e))?;
     photon_backend::sort_worst_first(&mut subs);
@@ -533,6 +535,7 @@ pub async fn get_subscription(
     /// Unique identifier of the subscription to look up.
     id: String,
 ) -> Result<Option<SubscriptionRow>, ServerFnError> {
+    let stall_after = stall_after();
     let request = RequestContexts::capture();
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
@@ -540,7 +543,7 @@ pub async fn get_subscription(
     photon_backend::validate_subscription_id(&id)
         .map_err(|e| ServerFnError::new(format!("get subscription: {e}")))?;
     let Some(sub) =
-        photon_backend::ops::load_subscription_at(&photon, &id, chrono::Utc::now(), stall_after())
+        photon_backend::ops::load_subscription_at(&photon, &id, chrono::Utc::now(), stall_after)
             .await
             .map_err(|e| map_ops_err(&e))?
     else {

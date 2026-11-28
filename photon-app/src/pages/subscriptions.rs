@@ -17,9 +17,6 @@ use photon_backend::SubscriptionHealth;
 use crate::components::{server_fn_error_bar, SubscriptionHealthBadge};
 use crate::server::{get_subscriptions, SubscriptionRow};
 
-/// `health` cell value for a row the reader holds nothing on.
-const NO_ACCESS_KEY: &str = "no-access";
-
 /// Rows a loading table draws.
 const SKELETON_ROWS: usize = 5;
 
@@ -60,9 +57,9 @@ fn row_model(row: &SubscriptionRow, now: chrono::DateTime<chrono::Utc>) -> DataT
     cells.insert(
         "health".into(),
         if has_access {
-            sub.health.query_key().to_string()
+            sub.health.label().to_string()
         } else {
-            NO_ACCESS_KEY.to_string()
+            crate::permissions::NO_ACCESS.to_string()
         },
     );
     cells.insert(
@@ -84,6 +81,13 @@ fn row_model(row: &SubscriptionRow, now: chrono::DateTime<chrono::Utc>) -> DataT
     DataTableRowModel::from_text_cells(sub.subscription_id.clone(), cells)
 }
 
+/// The health a cell's word names ("Catching up"); `None` for "No access".
+fn health_from_label(label: &str) -> Option<SubscriptionHealth> {
+    SubscriptionHealth::ALL
+        .into_iter()
+        .find(|h| h.label() == label)
+}
+
 fn cell_text(record: &DataRecord, field: &str) -> String {
     record
         .get(field)
@@ -96,8 +100,8 @@ fn columns() -> Vec<DataTableColumnDef> {
         view! { <Link href=href>{cell_text(&record, "name")}</Link> }.into_any()
     });
     let health_view = Arc::new(|record: DataRecord| {
-        let key = cell_text(&record, "health");
-        SubscriptionHealth::from_query_key(&key).map_or_else(
+        let label = cell_text(&record, "health");
+        health_from_label(&label).map_or_else(
             || {
                 view! {
                     <Badge appearance=BadgeAppearance::Outline color=BadgeColor::Subtle>
@@ -164,7 +168,11 @@ fn SubscriptionsTable(
         );
     });
 
-    view! {
+    // Rebuilt when the breakpoint flips (once, on the first measure) so narrow screens get the
+    // list view; the rows and the Health filter live outside and carry over.
+    move || {
+        let narrow = is_narrow.get();
+        view! {
         <DataTable
             items=items
             paging=PagingMode::None
@@ -172,7 +180,7 @@ fn SubscriptionsTable(
             sortable=false
             loading=loading
             loading_style=DataTableLoadingStyle::SkeletonRows(SKELETON_ROWS)
-            features=if is_narrow.get_untracked() { DataTableFeatures::LIST_VIEW } else { DataTableFeatures::empty() }
+            features=if narrow { DataTableFeatures::LIST_VIEW } else { DataTableFeatures::empty() }
             list_view=ListViewConfig::new("name")
                 .with_secondary_fields(vec!["health".into(), "waiting".into()])
             toolbar_config=DataTableToolbarConfig {
@@ -215,6 +223,7 @@ fn SubscriptionsTable(
                 </MessageBar>
             </DataTableNoResultsView>
         </DataTable>
+        }
     }
 }
 
@@ -342,6 +351,15 @@ mod tests {
             filter_by_health(&rows, Some(SubscriptionHealth::Paused)),
             vec![]
         );
+    }
+
+    #[test]
+    fn health_cells_hold_the_word() {
+        assert_eq!(
+            health_from_label("Catching up"),
+            Some(SubscriptionHealth::CatchingUp)
+        );
+        assert_eq!(health_from_label(crate::permissions::NO_ACCESS), None);
     }
 
     #[test]

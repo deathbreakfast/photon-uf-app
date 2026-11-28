@@ -5,10 +5,6 @@ async function open(page: Page, path: string) {
   await waitForHydrated(page);
 }
 
-/** Orbital components put their test id on an injected `<style>` too; skip that copy. */
-const byTestId = (page: Page, id: string) =>
-  page.locator(`[data-testid="${id}"]:not(style)`);
-
 /** Worst first, as the list sorts. */
 const RANK = ["failing", "stalled", "paused", "catching-up", "not-started", "healthy"];
 
@@ -95,7 +91,9 @@ test.describe("e2e.subs_health", () => {
     await open(page, "/photon/subscriptions");
     const table = page.getByTestId("photon-subscriptions-table");
     await expect(table).toBeVisible({ timeout: 60_000 });
-    await expect(table.getByText("e2e-failing").first()).toBeVisible();
-    await expect(byTestId(page, "photon-health-badge").first()).toBeInViewport();
+    // Below Md the table becomes a list: name, then the health word and waiting text.
+    await expect(table.getByText("e2e-failing").first()).toBeInViewport();
+    await expect(table.getByText("Failing", { exact: true }).last()).toBeInViewport();
+    await expect(table.getByText(/failed in 24 h/).first()).toBeInViewport();
   });
 });
