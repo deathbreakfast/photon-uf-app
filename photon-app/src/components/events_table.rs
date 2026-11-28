@@ -1,13 +1,289 @@
-//! Reusable events table with configurable columns.
+//! Events tables: the searchable [`EventsBrowser`] behind the Events page, and the small
+//! [`EventsTable`] the dashboard, topic and subscription pages show.
 //!
-//! Used across the events index, topic detail, subscription detail, and
-//! dashboard pages. Column visibility is controlled via [`EventsTableColumns`].
+//! [`EventsTable`] column visibility is controlled via [`EventsTableColumns`].
+
+// `#[component]` writes each prop name into its generated builder docs, where
+// clippy's `doc_markdown` flags snake_case names. Backticks can't be added there.
+#![allow(clippy::doc_markdown)]
 
 use leptos::prelude::*;
+use leptos_router::hooks::{use_location, use_navigate, use_query_map};
+use leptos_router::NavigateOptions;
+use orbital::components::{Body1, Caption1, Link, Pagination, PaginationConfig};
+use orbital::primitives::{DatetimeTimezone, Flex, FlexAlign, FlexGap, FlexJustify, FlexWrap};
+use orbital_base_components::OrbitalDateTime;
 
-use crate::components::skeletons::TableSkeleton;
-use crate::server::EventSummary;
+use crate::components::event_filter_toolbar::{EventFilterToolbar, EventFilters};
+use crate::components::events_data_table::{events_empty_state, EventsDataTable};
+use crate::components::server_fn_error_or_denied;
+use crate::components::skeletons::{SkeletonColumn, TableSkeleton};
+use crate::server::{
+    get_events_page, get_topics, EventSummary, EventsPage, EventsQuery, EventsRange, TopicRow,
+    EVENTS_PAGE_SIZE,
+};
 use orbital::primitives::{Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow};
+
+/// [`EventsBrowser`] columns with skeleton bar widths.
+const BROWSER_COLUMNS: [SkeletonColumn; 5] = [
+    ("Event", "96px"),
+    ("Topic", "120px"),
+    ("Key", "96px"),
+    ("Seq", "32px"),
+    ("Published", "160px"),
+];
+
+fn day_param(day: Option<OrbitalDateTime>) -> Option<String> {
+    day.and_then(|d| d.wall_date())
+        .map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+fn day_value(param: Option<&String>) -> Option<OrbitalDateTime> {
+    let date = chrono::NaiveDate::parse_from_str(param?, "%Y-%m-%d").ok()?;
+    OrbitalDateTime::from_naive_date(date, DatetimeTimezone::Utc)
+}
+
+/// "N events · newest first", or just the order when the store can't count.
+fn caption(page: &EventsPage) -> String {
+    match page.total {
+        Some(1) => "1 event \u{b7} newest first".to_string(),
+        Some(n) => format!("{n} events \u{b7} newest first"),
+        None => "Newest first".to_string(),
+    }
+}
+
+fn page_count(page: &EventsPage) -> usize {
+    let size = u64::from(EVENTS_PAGE_SIZE);
+    let by_total = page
+        .total
+        .map(|t| usize::try_from(t.div_ceil(size)).unwrap_or(usize::MAX));
+    let by_links = page.next.unwrap_or(page.page) as usize;
+    by_total.map_or(by_links, |n| {
+        n.max(1).min(crate::server::MAX_EVENTS_PAGE as usize)
+    })
+}
+
+/// Events search and list: search box, Topic and range filters, the table, the total and
+/// paging. Filters live in the URL query string.
+///
+/// Mount it with `topic` to fix the topic (the topic page's Events tab); the Topic select is
+/// then hidden. The toolbar sits outside the results' Suspense, so it keeps focus and typed
+/// text while a new page loads.
+#[allow(clippy::too_many_lines)] // one component: URL state, toolbar wiring and the results
+#[component]
+pub fn EventsBrowser(
+    /// Fix the list to one topic.
+    #[prop(optional, into)]
+    topic: Option<String>,
+) -> impl IntoView {
+    let query_map = use_query_map();
+    let location = use_location();
+    let navigate = use_navigate();
+    let fixed_topic = StoredValue::new(topic);
+
+    // The URL is the state. Resources key on this memo only.
+    let query = Memo::new(move |_| {
+        let map = query_map.read();
+        let mut query = EventsQuery::from_params(|k| map.get(k));
+        if let Some(topic) = fixed_topic.get_value() {
+            query.topic = Some(topic);
+        }
+        query
+    });
+
+    let initial = query.get_untracked();
+    let filters = EventFilters {
+        search: RwSignal::new(initial.q.clone().unwrap_or_default()),
+        topic: RwSignal::new(initial.topic.clone().unwrap_or_default()),
+        range: RwSignal::new(initial.range.as_param().to_string()),
+        from: RwSignal::new(day_value(initial.from.as_ref())),
+        to: RwSignal::new(day_value(initial.to.as_ref())),
+    };
+    let page_sig = RwSignal::new(initial.page.max(1) as usize);
+
+    let commit = {
+        move |update: &dyn Fn(&mut EventsQuery)| {
+            let current = query.get_untracked();
+            let mut next = current.clone();
+            update(&mut next);
+            if fixed_topic.get_value().is_some() {
+                next.topic = None;
+            }
+            let mut current_url = current;
+            if fixed_topic.get_value().is_some() {
+                current_url.topic = None;
+            }
+            let qs = next.to_query_string();
+            if qs == current_url.to_query_string() {
+                return;
+            }
+            let path = location.pathname.get_untracked();
+            let href = if qs.is_empty() {
+                path
+            } else {
+                format!("{path}?{qs}")
+            };
+            navigate(
+                &href,
+                NavigateOptions {
+                    scroll: false,
+                    ..NavigateOptions::default()
+                },
+            );
+        }
+    };
+    let commit = StoredValue::new(commit);
+    let run_commit = move |update: &dyn Fn(&mut EventsQuery)| commit.with_value(|c| c(update));
+
+    // URL -> controls (back button, "Search the last 7 days").
+    Effect::new(move |_| {
+        let q = query.get();
+        let set = |sig: RwSignal<String>, value: String| {
+            if sig.get_untracked() != value {
+                sig.set(value);
+            }
+        };
+        set(filters.topic, q.topic.clone().unwrap_or_default());
+        set(filters.range, q.range.as_param().to_string());
+        if page_sig.get_untracked() != q.page.max(1) as usize {
+            page_sig.set(q.page.max(1) as usize);
+        }
+    });
+
+    // Controls -> URL. Each skips its first run, which only reads the initial value.
+    Effect::new(move |prev: Option<()>| {
+        let topic = filters.topic.get();
+        if prev.is_some() {
+            run_commit(&|q| {
+                q.topic = (!topic.is_empty()).then(|| topic.clone());
+                q.page = 1;
+            });
+        }
+    });
+    Effect::new(move |prev: Option<()>| {
+        let range = EventsRange::from_param(&filters.range.get()).unwrap_or_default();
+        let from = day_param(filters.from.get());
+        let to = day_param(filters.to.get());
+        if prev.is_none() {
+            return;
+        }
+        // A custom range waits for both days before it searches.
+        if range == EventsRange::Custom && (from.is_none() || to.is_none()) {
+            return;
+        }
+        run_commit(&|q| {
+            q.range = range;
+            q.from.clone_from(&from);
+            q.to.clone_from(&to);
+            q.page = 1;
+        });
+    });
+    Effect::new(move |prev: Option<()>| {
+        let page = page_sig.get();
+        if prev.is_some() {
+            run_commit(&|q| q.page = u32::try_from(page).unwrap_or(1));
+        }
+    });
+
+    let on_search = Callback::new(move |()| {
+        let text = filters.search.get_untracked().trim().to_string();
+        run_commit(&|q| {
+            q.q = (!text.is_empty()).then(|| text.clone());
+            q.page = 1;
+        });
+    });
+
+    // Topic names for the select load in the browser through an action, not a resource, so
+    // no Suspense (the page's included) waits on them and the toolbar never remounts. The
+    // current topic is always listed.
+    let load_topics = Action::new(|(): &()| async move { get_topics().await });
+    Effect::new(move |_| {
+        load_topics.dispatch(());
+    });
+    let topics = Signal::derive(move || {
+        let mut names: Vec<String> = load_topics
+            .value()
+            .get()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(TopicRow::has_access)
+            .map(|row| row.topic.topic_name)
+            .collect();
+        if let Some(current) = query.with(|q| q.topic.clone()) {
+            if !names.contains(&current) {
+                names.insert(0, current);
+            }
+        }
+        names
+    });
+
+    let events_res = Resource::new(
+        move || query.get(),
+        |q| async move { get_events_page(q).await },
+    );
+
+    let show_topic = fixed_topic.get_value().is_none();
+    let skeleton = move || view! { <TableSkeleton columns=BROWSER_COLUMNS.to_vec() /> };
+
+    view! {
+        <Flex vertical=true gap=FlexGap::Large attr:data-testid="photon-events-browser">
+            <EventFilterToolbar filters=filters topics=topics show_topic=show_topic on_search=on_search />
+            <Suspense fallback=skeleton>
+                {move || events_res.get().map(|res| match res {
+                    Ok(EventsPage { exact_id: Some(id), .. }) => view! { <OpenEvent id=id /> }.into_any(),
+                    Ok(page) if page.rows.is_empty() => {
+                        let q = query.get_untracked();
+                        events_empty_state(&q, Callback::new(move |()| run_commit(&|q| {
+                            q.range = EventsRange::Last7d;
+                            q.page = 1;
+                        })))
+                    }
+                    Ok(page) => {
+                        let count = page_count(&page);
+                        let caption = caption(&page);
+                        view! {
+                            <Flex vertical=true gap=FlexGap::Medium>
+                                <EventsDataTable rows=page.rows show_topic=show_topic />
+                                <Flex wrap=FlexWrap::Wrap justify=FlexJustify::SpaceBetween align=FlexAlign::Center>
+                                    <Caption1 attr:data-testid="photon-events-caption">{caption}</Caption1>
+                                    <div data-testid="photon-events-pagination">
+                                        <Pagination config=PaginationConfig::new(page_sig.into(), Signal::derive(move || count)) />
+                                    </div>
+                                </Flex>
+                            </Flex>
+                        }.into_any()
+                    }
+                    Err(e) => server_fn_error_or_denied(&e, "see this topic's events"),
+                })}
+            </Suspense>
+        </Flex>
+    }
+}
+
+/// An exact event id: open the event. Replace the history entry so Back returns to the
+/// search before it.
+#[component]
+fn OpenEvent(
+    /// Event to open.
+    id: String,
+) -> impl IntoView {
+    let navigate = use_navigate();
+    let href = photon_backend::photon_event_path(&id);
+    let target = href.clone();
+    Effect::new(move |_| {
+        navigate(
+            &target,
+            NavigateOptions {
+                replace: true,
+                ..NavigateOptions::default()
+            },
+        );
+    });
+    view! {
+        <Body1 block=true>"Opening " <Link href=href>{id}</Link> "\u{2026}"</Body1>
+    }
+}
 
 /// Which columns [`EventsTable`] renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

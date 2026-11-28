@@ -2,7 +2,10 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::types::{DashboardStats, EventDetail, EventSummary, SubscriptionSummary, TopicSummary};
+use crate::types::{
+    DashboardStats, DeliveryState, EventDetail, EventSummary, PayloadField, PublishedBy,
+    SubscriptionSummary, TopicSummary, MASKED_VALUE,
+};
 
 /// Formats the short payload-preview chip shown in event list rows.
 #[must_use]
@@ -94,7 +97,7 @@ pub fn event_summary_from_transport(
     event_summary_from_meta(event_id, topic_name, topic_key, seq, created_at, "stored")
 }
 
-/// Builds [`EventDetail`] when Valence metadata exists but transport payload is gone.
+/// Builds [`EventDetail`] when the event's metadata is known but its payload is gone.
 #[must_use]
 pub fn event_detail_transport_expired(
     event_id: impl Into<String>,
@@ -112,21 +115,31 @@ pub fn event_detail_transport_expired(
         created_at: created_at.into(),
         delivery_status: delivery_status.into(),
         payload_json: serde_json::Value::Null,
-        actor_json: serde_json::Value::Null,
+        fields: Vec::new(),
+        published_by: PublishedBy::Anonymous,
+        personal_fields: Vec::new(),
+        deliveries: Vec::new(),
+        retention_secs: None,
         transport_expired: true,
     }
 }
 
-/// Builds [`EventDetail`] from a live transport event.
+/// Builds a masked [`EventDetail`] from a live transport event.
+///
+/// `personal` names the payload fields the topic schema marks personal; their values are
+/// replaced before the record leaves the server. Deliveries and retention are filled in by
+/// the caller.
 #[must_use]
+#[allow(clippy::too_many_arguments)] // one argument per transport column, as the other builders
 pub fn event_detail_from_transport(
     event_id: impl Into<String>,
     topic_name: impl Into<String>,
     topic_key: Option<String>,
     seq: i64,
     created_at: impl Into<String>,
-    payload_json: serde_json::Value,
-    actor_json: serde_json::Value,
+    payload_json: &serde_json::Value,
+    actor_json: &serde_json::Value,
+    personal: &[&str],
 ) -> EventDetail {
     EventDetail {
         event_id: event_id.into(),
@@ -135,9 +148,129 @@ pub fn event_detail_from_transport(
         seq,
         created_at: created_at.into(),
         delivery_status: "stored".into(),
-        payload_json,
-        actor_json,
+        payload_json: mask_payload(payload_json, personal),
+        fields: payload_fields(payload_json, personal, false),
+        published_by: published_by(actor_json).0,
+        personal_fields: personal.iter().map(|s| (*s).to_string()).collect(),
+        deliveries: Vec::new(),
+        retention_secs: None,
         transport_expired: false,
+    }
+}
+
+/// Copy of `payload` with every top-level `personal` field's value replaced by
+/// [`MASKED_VALUE`]. Non-object payloads come back unchanged.
+#[must_use]
+pub fn mask_payload(payload: &serde_json::Value, personal: &[&str]) -> serde_json::Value {
+    let mut out = payload.clone();
+    if let Some(obj) = out.as_object_mut() {
+        for (name, value) in obj.iter_mut() {
+            if personal.contains(&name.as_str()) {
+                *value = serde_json::Value::String(MASKED_VALUE.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Top-level payload fields as event page rows, in payload order.
+///
+/// Personal fields carry `value: None` unless `reveal` is set. A non-object payload is one
+/// row named `value`.
+#[must_use]
+pub fn payload_fields(
+    payload: &serde_json::Value,
+    personal: &[&str],
+    reveal: bool,
+) -> Vec<PayloadField> {
+    let display = |v: &serde_json::Value| match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    match payload {
+        serde_json::Value::Object(obj) => obj
+            .iter()
+            .map(|(name, value)| {
+                let is_personal = personal.contains(&name.as_str());
+                PayloadField {
+                    name: name.clone(),
+                    value: (!is_personal || reveal).then(|| display(value)),
+                    personal: is_personal,
+                }
+            })
+            .collect(),
+        serde_json::Value::Null => Vec::new(),
+        other => vec![PayloadField {
+            name: "value".into(),
+            value: Some(display(other)),
+            personal: false,
+        }],
+    }
+}
+
+/// The event's personal values as text: each `personal` payload field (strings as-is, other
+/// values as JSON) and a publishing person's user id. Empty values are left out.
+#[must_use]
+pub fn personal_values(
+    payload: &serde_json::Value,
+    actor_json: &serde_json::Value,
+    personal: &[&str],
+) -> Vec<String> {
+    let mut values: Vec<String> = personal
+        .iter()
+        .filter_map(|name| payload.get(*name))
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .collect();
+    values.extend(published_by(actor_json).1);
+    values.retain(|v| !v.is_empty() && v != "null");
+    values
+}
+
+/// `text` with every occurrence of each value replaced by [`MASKED_VALUE`], longest first so a
+/// value inside another is masked with it.
+#[must_use]
+pub fn mask_values(text: &str, values: &[String]) -> String {
+    let mut sorted: Vec<&String> = values.iter().collect();
+    sorted.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    sorted.into_iter().fold(text.to_string(), |acc, v| {
+        acc.replace(v.as_str(), MASKED_VALUE)
+    })
+}
+
+/// Who published an event, from the Valence actor JSON Photon captured, plus the user id
+/// when it was a person.
+///
+/// `{"User":{"user_id":..}}` is a person, `{"System":..}` and `{"ServiceUser":..}` are the
+/// system, and anything else (`"Anonymous"`, `null`, an unknown shape) is anonymous.
+#[must_use]
+pub fn published_by(actor_json: &serde_json::Value) -> (PublishedBy, Option<String>) {
+    if let Some(user_id) = actor_json
+        .get("User")
+        .and_then(|u| u.get("user_id"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return (PublishedBy::Person, Some(user_id.to_string()));
+    }
+    if actor_json.get("System").is_some() || actor_json.get("ServiceUser").is_some() {
+        return (PublishedBy::System, None);
+    }
+    (PublishedBy::Anonymous, None)
+}
+
+/// Handled when the subscription's checkpoint is at or past `seq`, otherwise Waiting with
+/// the event's place in line (a missing checkpoint means nothing handled yet).
+#[must_use]
+pub fn checkpoint_delivery_state(seq: i64, checkpoint: Option<i64>) -> DeliveryState {
+    let done = checkpoint.unwrap_or(0);
+    if seq <= done {
+        DeliveryState::Handled
+    } else {
+        DeliveryState::Waiting {
+            position: seq - done,
+        }
     }
 }
 

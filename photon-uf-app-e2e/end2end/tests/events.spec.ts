@@ -4,13 +4,16 @@ import { test, expect, seedAuth, waitForHydrated } from "./fixtures";
 test.describe("e2e.events", () => {
   test("e2e.events.index_happy", async ({ page }) => {
     const seeded = await seedAuth(page, "admin");
-    await page.goto("/photon/events", { waitUntil: "domcontentloaded" });
+    // The orders fixture is newer, so filter to the ops topic to find its event.
+    await page.goto(`/photon/events?topic=${encodeURIComponent(seeded.fixtures.topic_name)}`, {
+      waitUntil: "domcontentloaded",
+    });
     await waitForHydrated(page);
     const events = page.getByTestId("photon-events");
     await expect(events).toBeVisible({ timeout: 60_000 });
     // Topic also appears as a hidden <option>; assert the table cell instead.
     await expect(
-      events.getByRole("cell", { name: seeded.fixtures.topic_name }),
+      events.getByTestId("photon-events-table").getByText(seeded.fixtures.topic_name, { exact: true }).first(),
     ).toBeVisible({ timeout: 60_000 });
   });
 
@@ -34,7 +37,7 @@ test.describe("e2e.events", () => {
     });
     await waitForHydrated(page);
     await expect(page.getByTestId("photon-event-detail")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText("Event not found")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("No event with this id")).toBeVisible({ timeout: 60_000 });
   });
 });
 

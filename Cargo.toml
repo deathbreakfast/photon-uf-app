@@ -92,6 +92,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 photon = { package = "uf-photon", git = "https://github.com/unified-field-dev/photon", branch = "main", default-features = false }
 photon-core = { package = "uf-photon-core", git = "https://github.com/unified-field-dev/photon", branch = "main", default-features = false }
 valence = { package = "uf-valence", git = "https://github.com/unified-field-dev/valence", branch = "main", default-features = false, features = ["mem", "sqlite"] }
+valence-codegen = { package = "uf-valence-codegen", git = "https://github.com/unified-field-dev/valence", branch = "main" }
 higgs = { git = "https://github.com/unified-field-dev/higgs", branch = "main", default-features = false }
 higgs-host = { git = "https://github.com/unified-field-dev/higgs", branch = "main", default-features = false }
 higgs-identity = { git = "https://github.com/unified-field-dev/higgs", branch = "main" }
@@ -99,6 +100,8 @@ gauge = { git = "https://github.com/unified-field-dev/gauge", branch = "main", d
 
 orbital = { package = "orbital-ui", git = "https://github.com/unified-field-dev/orbital", branch = "main", default-features = false }
 orbital-macros = { git = "https://github.com/unified-field-dev/orbital", branch = "main" }
+orbital-base-components = { git = "https://github.com/unified-field-dev/orbital", branch = "main", default-features = false }
+orbital-data = { git = "https://github.com/unified-field-dev/orbital", branch = "main", default-features = false }
 
 uf-integrations = { git = "https://github.com/unified-field-dev/unified-field-product", branch = "main", default-features = false }
 uf-product-macros = { git = "https://github.com/unified-field-dev/unified-field-product", branch = "main" }
@@ -169,3 +172,13 @@ uf-integrations = { git = "https://github.com/deathbreakfast/unified-field-produ
 uf-product = { git = "https://github.com/deathbreakfast/unified-field-product", branch = "main" }
 uf-product-macros = { git = "https://github.com/deathbreakfast/unified-field-product", branch = "main" }
 uf-search-core = { git = "https://github.com/deathbreakfast/unified-field-product", branch = "main" }
+
+# Event listing and counts, personal fields, redeliver and DLQ-by-event are on the
+# deathbreakfast photon fork's main ahead of unified-field-dev. Drop this once it lands there.
+[patch."https://github.com/unified-field-dev/photon"]
+uf-photon = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+uf-photon-core = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-backend = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-macros = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-runtime = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-telemetry = { git = "https://github.com/deathbreakfast/photon", branch = "main" }

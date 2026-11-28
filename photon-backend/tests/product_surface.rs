@@ -139,13 +139,28 @@ fn ops_reads_gate_per_resource_happy_path() {
         ("get_subscription", r#"require_subscription(&id, "View")"#),
         ("get_events", r#"require_topic(topic, "View")"#),
         ("get_event", r#"require_topic(&event.topic_name, "View")"#),
+        ("get_events_page", r#"require_topic(topic, "View")"#),
+        ("reveal_event_fields", r#"require_topic(&topic, "View")"#),
+        (
+            "get_reveal_log",
+            r#"require_topic(&topic_name, "Maintain")"#,
+        ),
+        (
+            "redeliver_event",
+            r#"require_subscription(&subscription_id, "Run")"#,
+        ),
     ] {
         assert!(
             server_fn_body(&server, fn_name).contains(gate),
             "`{fn_name}` must check `{gate}` as the session actor"
         );
     }
-    for fn_name in ["get_dashboard_stats", "get_recent_events", "get_events"] {
+    for fn_name in [
+        "get_dashboard_stats",
+        "get_recent_events",
+        "get_events",
+        "get_events_page",
+    ] {
         assert!(
             server_fn_body(&server, fn_name).contains("viewable_topics(&photon)"),
             "`{fn_name}` must keep only topics the reader can View"
@@ -255,12 +270,36 @@ fn index_pages_testid_and_list_bindings_happy_path() {
     }
 
     let events = read_app("pages/events.rs");
-    for needle in ["photon-events", "get_events", "get_topics"] {
+    for needle in ["photon-events", "EventsBrowser"] {
         assert!(
             events.contains(needle),
             "PhotonEventsIndexPage missing `{needle}`"
         );
     }
+    let browser = read_app("components/events_table.rs");
+    for needle in ["get_events_page", "get_topics"] {
+        assert!(browser.contains(needle), "EventsBrowser missing `{needle}`");
+    }
+}
+
+#[test]
+fn reveal_is_recorded_before_values_return_happy_path() {
+    let server = read_app("server.rs");
+    let body = server_fn_body(&server, "reveal_event_fields");
+    let recorded = body
+        .find("reveal_log::record(")
+        .expect("reveal must be recorded");
+    let returned = body
+        .find("Ok(RevealedFields")
+        .expect("reveal returns values");
+    assert!(
+        recorded < returned,
+        "record the reveal before returning values"
+    );
+    assert!(
+        server.contains("PhotonEventReveal::create(model, valence, valence::use_!("),
+        "the reveal log write must declare its data use"
+    );
 }
 
 #[test]

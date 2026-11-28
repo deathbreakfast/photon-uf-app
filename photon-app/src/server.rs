@@ -19,6 +19,12 @@
 //!   [`require_subscription`]. Hosts without an access backend fail closed.
 //! - Catalog, subscription, and event reads come from Photon (`admin_snapshot`,
 //!   registry, `list_*`, `get_event`).
+//! - Event payloads leave the server with personal fields (the topic schema's
+//!   `"x-personal": true` marks) and a publishing person's id masked. [`reveal_event_fields`]
+//!   returns the real values only after View on the topic and a recorded reason, and writes
+//!   the reveal to the topic's reveal log ([`get_reveal_log`], topic owners only) as the
+//!   session actor.
+//! - [`redeliver_event`] needs Run on the subscription.
 //! - Path/query ids are rejected when blank, oversized, or containing `/` `\`,
 //!   controls, or `.` / `..` (`photon_backend::validate_*`).
 //!
@@ -33,7 +39,9 @@
 
 use leptos::prelude::*;
 pub use photon_backend::{
-    DashboardStats, EventDetail, EventSummary, SubscriptionSummary, TopicSummary,
+    DashboardStats, DeliveryRow, DeliveryState, EventDetail, EventSummary, EventsPage, EventsQuery,
+    EventsRange, PayloadField, PublishedBy, RevealReason, RevealRecordRow, RevealedFields,
+    SubscriptionSummary, TopicSummary, EVENTS_PAGE_SIZE, MASKED_VALUE, MAX_EVENTS_PAGE,
 };
 
 /// App-wide admin permission name
@@ -397,7 +405,39 @@ pub async fn get_events(
         .collect())
 }
 
-/// Get a single event by ID. Needs View on the event's topic.
+/// Get one page of the Events list: search by event id or key, a topic and a time range.
+///
+/// Searches only topics the reader can View; asking for one topic needs View on it. An
+/// exact event id on a viewable topic comes back as `exact_id` (whatever the range or
+/// topic filter) so the page can open it.
+#[uf_product_macros::server]
+pub async fn get_events_page(
+    /// Filters, time range and page.
+    query: EventsQuery,
+) -> Result<EventsPage, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    require_session(&ctx)?;
+    let photon = photon_from_context()?;
+    if let Some(topic) = query
+        .topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        photon_backend::validate_topic_name(topic)
+            .map_err(|e| ServerFnError::new(format!("get events: {e}")))?;
+        require_topic(topic, "View").await?;
+    }
+    let viewable: Vec<String> = viewable_topics(&photon).await.into_iter().collect();
+    photon_backend::ops::load_events_page(&photon, &query, &viewable, chrono::Utc::now())
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+/// Get a single event by ID, personal values masked. Needs View on the event's topic.
+///
+/// Each delivery row says whether the reader holds Run on that subscription, so the page
+/// offers Redeliver only where it would work.
 #[uf_product_macros::server]
 pub async fn get_event(
     /// Unique identifier of the event to look up.
@@ -406,13 +446,267 @@ pub async fn get_event(
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
-    let event = photon_backend::ops::load_event(&photon, &id)
+    let mut event = photon_backend::ops::load_event(&photon, &id)
         .await
         .map_err(|e| map_ops_err(&e))?;
-    if let Some(event) = &event {
+    if let Some(event) = &mut event {
         require_topic(&event.topic_name, "View").await?;
+        let backend = uf_product::access::use_resource_access_backend();
+        for row in &mut event.deliveries {
+            row.can_run = reader_can(
+                backend.as_ref(),
+                &crate::permissions::subscription_ref(&row.subscription_id),
+                "Run",
+            )
+            .await;
+        }
     }
     Ok(event)
+}
+
+/// Longest details text a reveal accepts.
+pub const MAX_REVEAL_DETAILS_CHARS: usize = 500;
+
+/// Show an event's personal fields to the reader, for this page view only.
+///
+/// Needs View on the event's topic and a reason. Records who asked, when, the reason and the
+/// details in the topic's reveal log before returning anything.
+#[uf_product_macros::server]
+pub async fn reveal_event_fields(
+    /// Event whose personal fields to show.
+    event_id: String,
+    /// Why the reader needs them.
+    reason: RevealReason,
+    /// What the reader typed to explain the reason.
+    details: String,
+) -> Result<RevealedFields, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    require_session(&ctx)?;
+    let details = details.trim();
+    if details.is_empty() {
+        return Err(ServerFnError::new(
+            "reveal personal fields: say why you need them",
+        ));
+    }
+    if details.chars().count() > MAX_REVEAL_DETAILS_CHARS {
+        return Err(ServerFnError::new(format!(
+            "reveal personal fields: keep the details under {MAX_REVEAL_DETAILS_CHARS} characters"
+        )));
+    }
+    let photon = photon_from_context()?;
+    let topic = photon_backend::ops::event_topic(&photon, &event_id)
+        .await
+        .map_err(|e| map_ops_err(&e))?
+        .ok_or_else(|| ServerFnError::new("reveal personal fields: no such event"))?;
+    require_topic(&topic, "View").await?;
+    let reveal = photon_backend::ops::reveal_event(&photon, &event_id)
+        .await
+        .map_err(|e| map_ops_err(&e))?
+        .ok_or_else(|| {
+            ServerFnError::new("reveal personal fields: this event's payload has expired")
+        })?;
+    let user_id = ctx
+        .session_user_id()
+        .cloned()
+        .ok_or_else(|| ServerFnError::new("Authentication required"))?;
+    let valence = ctx
+        .valence()
+        .map_err(|e| ServerFnError::new(format!("reveal personal fields: {e}")))?;
+    let record = reveal_log::record(&valence, &topic, &event_id, &user_id, reason, details).await?;
+    Ok(RevealedFields {
+        fields: reveal.fields,
+        payload_json: reveal.payload_json,
+        published_by_id: reveal.published_by_id,
+        record,
+    })
+}
+
+/// A topic's reveal log, newest first. Needs Maintain on the topic (its owners).
+#[uf_product_macros::server]
+#[server(prefix = "/api", endpoint = "photon_reveal_log")]
+pub async fn get_reveal_log(
+    /// Topic whose reveal log to read.
+    topic_name: String,
+) -> Result<Vec<RevealRecordRow>, ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    require_session(&ctx)?;
+    photon_backend::validate_topic_name(&topic_name)
+        .map_err(|e| ServerFnError::new(format!("get reveal log: {e}")))?;
+    require_topic(&topic_name, "Maintain").await?;
+    let valence = ctx
+        .valence()
+        .map_err(|e| ServerFnError::new(format!("get reveal log: {e}")))?;
+    reveal_log::list(&valence, &topic_name).await
+}
+
+/// Send one event to one subscription again. Needs Run on the subscription.
+///
+/// Only that subscription gets the event; its handler runs once more, so it may act twice.
+#[uf_product_macros::server]
+pub async fn redeliver_event(
+    /// Event to send again.
+    event_id: String,
+    /// Subscription (`{topic}:{handler}`) to send it to.
+    subscription_id: String,
+) -> Result<(), ServerFnError> {
+    let ctx = higgs::Higgs::from_request().await?;
+    require_session(&ctx)?;
+    photon_backend::validate_subscription_id(&subscription_id)
+        .map_err(|e| ServerFnError::new(format!("redeliver: {e}")))?;
+    require_subscription(&subscription_id, "Run").await?;
+    let photon = photon_from_context()?;
+    let by = ctx
+        .session_user_id()
+        .map(|id| format!("user:{id}"))
+        .ok_or_else(|| ServerFnError::new("Authentication required"))?;
+    photon_backend::ops::redeliver_event(&photon, &event_id, &subscription_id, &by)
+        .await
+        .map_err(|e| map_ops_err(&e))
+}
+
+#[cfg(feature = "ssr")]
+pub use reveal_log::{TopicOwnerRead, PHOTON_REVEALED_BY_VIEWER, PHOTON_TOPIC_OWNER_READ};
+
+/// The per-topic reveal log: the `PhotonEventReveal` Valence model's privacy rules, writes
+/// and reads.
+#[cfg(feature = "ssr")]
+mod reveal_log {
+    use std::any::Any;
+
+    use gauge::resource_permissions::{permission_name, ResourceAction};
+    use leptos::prelude::ServerFnError;
+    use valence::{
+        Actor, ActorContext, Error, PolicyEvaluator, PrivacyOperation, PrivacyRule, Valence,
+    };
+
+    use super::{RevealReason, RevealRecordRow};
+    use crate::generated::{PhotonEventReveal, PhotonEventRevealReason};
+    use valence::{Model, RecordId, SortDirection, StringPredicate};
+
+    fn revealed_by_viewer(record: &serde_json::Value, viewer: &Actor) -> bool {
+        valence::privacy_policies::owner::check_owner_by_field(record, viewer, "revealed_by")
+    }
+
+    /// The person a reveal record names: they write it as themselves and can read it.
+    pub const PHOTON_REVEALED_BY_VIEWER: PrivacyRule = PrivacyRule {
+        name: "photon::REVEALED_BY_VIEWER",
+        description: Some("The person who was shown the personal fields"),
+        check: revealed_by_viewer,
+    };
+
+    /// Lets people with Maintain on the record's topic read it (System always passes).
+    #[derive(Debug, Clone)]
+    pub struct TopicOwnerRead {
+        /// Valence privacy rule name.
+        pub rule_name: &'static str,
+    }
+
+    /// The topic's owners read its reveal log.
+    pub const PHOTON_TOPIC_OWNER_READ: TopicOwnerRead = TopicOwnerRead {
+        rule_name: "photon::TOPIC_OWNER_READ",
+    };
+
+    #[async_trait::async_trait]
+    impl PolicyEvaluator for TopicOwnerRead {
+        fn name(&self) -> &'static str {
+            self.rule_name
+        }
+
+        fn description(&self) -> Option<&'static str> {
+            Some("Maintain on the record's Photon topic")
+        }
+
+        async fn evaluate(
+            &self,
+            _op: PrivacyOperation,
+            record: &serde_json::Value,
+            actor: &dyn ActorContext,
+            v: &Valence,
+        ) -> valence::Result<bool> {
+            let viewer: Actor = serde_json::from_value(actor.actor_json().clone())
+                .map_err(|e| Error::Internal(format!("invalid actor context: {e}")))?;
+            if viewer.is_system() {
+                return Ok(true);
+            }
+            let Some(topic) = record.get("topic_name").and_then(serde_json::Value::as_str) else {
+                return Ok(false);
+            };
+            let name = permission_name(
+                crate::permissions::PHOTON_TOPIC,
+                topic,
+                ResourceAction::Maintain,
+            );
+            gauge::service::actor_can(v, &name)
+                .await
+                .map_err(|e| Error::Privacy(format!("topic owner check for '{name}': {e}")))
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    fn reveal_err(e: impl std::fmt::Display) -> ServerFnError {
+        ServerFnError::new(format!("reveal log: {e}"))
+    }
+
+    const fn stored_reason(reason: RevealReason) -> PhotonEventRevealReason {
+        match reason {
+            RevealReason::Support => PhotonEventRevealReason::Support,
+            RevealReason::Debugging => PhotonEventRevealReason::Debugging,
+            RevealReason::DataSubjectRequest => PhotonEventRevealReason::DataSubjectRequest,
+        }
+    }
+
+    fn row(model: &PhotonEventReveal) -> RevealRecordRow {
+        RevealRecordRow {
+            event_id: model.event_id().clone(),
+            revealed_by: model.revealed_by().map(|r| r.id().to_string()),
+            revealed_at: model.revealed_at().to_rfc3339(),
+            reason: RevealReason::parse(model.reason().as_str()).unwrap_or(RevealReason::Support),
+            details: model.details().clone(),
+        }
+    }
+
+    /// Write one reveal as the session actor and return it as the log shows it.
+    pub async fn record(
+        valence: &Valence,
+        topic: &str,
+        event_id: &str,
+        user_id: &str,
+        reason: RevealReason,
+        details: &str,
+    ) -> Result<RevealRecordRow, ServerFnError> {
+        let model = PhotonEventReveal::new(
+            topic.to_string(),
+            event_id.to_string(),
+            Some(RecordId::new(
+                "user",
+                user_id.strip_prefix("user:").unwrap_or(user_id),
+            )),
+            chrono::Utc::now(),
+            stored_reason(reason),
+            details.to_string(),
+        )
+        .map_err(reveal_err)?;
+        let saved = PhotonEventReveal::create(model, valence, valence::use_!(r"When someone on the Photon admin app asks to see an event's **personal fields**, we first **save a reveal record**: the event and its topic, **who asked**, the time, the **reason** they picked and the **details** they typed. Only after the record is saved are the fields shown to that person, on that page. The person who asked and the **owners of the topic** can read the record in the topic's reveal log, and nobody can change or delete it."))
+            .await
+            .map_err(reveal_err)?;
+        Ok(row(&saved))
+    }
+
+    /// Every reveal on `topic` the actor may read, newest first.
+    pub async fn list(
+        valence: &Valence,
+        topic: &str,
+    ) -> Result<Vec<RevealRecordRow>, ServerFnError> {
+        let rows = PhotonEventReveal::query(valence, valence::use_!(r"To show a topic's **reveal log** to the **owners of the topic** on the Photon admin app, we **list its reveal records**: which event, **who was shown its personal fields**, when, and the **reason and details** they gave. The records are returned newest first to the owner who asked for the log."))
+            .where_topic_name(StringPredicate::Equals(topic.to_string()))
+            .order_by_revealed_at(SortDirection::Desc)
+            .await
+            .map_err(reveal_err)?;
+        Ok(rows.iter().map(row).collect())
+    }
 }
 
 #[cfg(test)]

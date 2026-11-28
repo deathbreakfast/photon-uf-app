@@ -12,7 +12,7 @@ use gauge::service;
 use gauge::super_user::SUPER_USER_GROUP_NAME;
 use higgs::actor_policy::external_actor_json_policy;
 use higgs::{HiggsConfig, HiggsValenceFactory};
-use photon::{configure, subscribe, topic, Actor, JsonIdentityFactory, Photon};
+use photon::{configure, subscribe, topic, Actor, InProcStoragePort, JsonIdentityFactory, Photon};
 use tokio::sync::OnceCell;
 use valence::{
     register_backend_logical_names, router_key, Actor as ValenceActor, DatabaseBackend,
@@ -23,6 +23,8 @@ use valence::{
 
 struct E2eState {
     router: Arc<DatabaseRouter>,
+    #[allow(dead_code)]
+    storage: Arc<InProcStoragePort>,
     higgs: Arc<HiggsConfig>,
     photon: Arc<Photon>,
     default_backend_key: String,
@@ -35,10 +37,24 @@ pub struct FixtureIds {
     pub topic_name: String,
     pub subscription_id: String,
     pub event_id: String,
+    /// Orders topic: a personal field, three handlers (handled, waiting, failed).
+    pub orders_topic: String,
+    /// An order published by a person; every handler state shows on it.
+    pub order_event_id: String,
+    /// That order's key.
+    pub order_key: String,
+    /// A key on three orders.
+    pub search_key: String,
+    /// Live events on the orders topic.
+    pub orders_total: u64,
+    /// An order whose payload was trimmed after its handler dead-lettered it.
+    pub expired_event_id: String,
 }
 
 static E2E_STATE: OnceCell<Arc<E2eState>> = OnceCell::const_new();
 static HANDLER_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `send-confirmation` runs per event id, so a redeliver shows up as one more.
+static CONFIRMATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Lab topic registered into the in-process Photon registry.
 pub const E2E_TOPIC_NAME: &str = "test.photon.e2e.ops";
@@ -50,6 +66,55 @@ pub const PHOTON_ADMINS_GROUP_ID: &str = "photon.admins";
 #[topic(name = "test.photon.e2e.ops")]
 pub struct E2eOpsEvent {
     pub value: u32,
+}
+
+/// Orders topic for the Events and event page specs.
+pub const E2E_ORDERS_TOPIC: &str = "test.photon.e2e.orders";
+/// Orders published as one each under these keys (`ord-0001` ..).
+const E2E_SINGLE_ORDERS: usize = 27;
+/// Key on [`E2E_SEARCH_ORDERS`] orders.
+const E2E_SEARCH_KEY: &str = "ord-search";
+const E2E_SEARCH_ORDERS: usize = 3;
+/// Key of the order whose payload is trimmed.
+const E2E_EXPIRED_KEY: &str = "ord-expired";
+
+// Not `keyed_by`: each publish passes its key explicitly, which is all the specs need.
+#[topic(name = "test.photon.e2e.orders")]
+pub struct E2eOrderPlaced {
+    pub order_id: String,
+    #[photon(personal)]
+    pub customer_email: String,
+    pub total_cents: u32,
+}
+
+#[subscribe(topic = "test.photon.e2e.orders", durable = "send-confirmation")]
+async fn on_order_confirm(_actor: Box<dyn Actor>, event: E2eOrderPlaced) -> photon::Result<()> {
+    if let Ok(mut seen) = CONFIRMATIONS.lock() {
+        seen.push(event.order_id);
+    }
+    Ok(())
+}
+
+/// Paused at boot, so every order waits for it.
+#[subscribe(topic = "test.photon.e2e.orders", durable = "warehouse")]
+async fn on_order_warehouse(_actor: Box<dyn Actor>, _event: E2eOrderPlaced) -> photon::Result<()> {
+    Ok(())
+}
+
+/// Always fails, so every order is in its dead-letter queue.
+#[subscribe(topic = "test.photon.e2e.orders", durable = "fraud-check")]
+async fn on_order_fraud(_actor: Box<dyn Actor>, _event: E2eOrderPlaced) -> photon::Result<()> {
+    Err(photon::PhotonError::Internal(
+        "fraud service unavailable".into(),
+    ))
+}
+
+/// How many times `send-confirmation` handled orders with `order_id`.
+pub fn e2e_confirmations(order_id: &str) -> usize {
+    CONFIRMATIONS
+        .lock()
+        .map(|seen| seen.iter().filter(|id| *id == order_id).count())
+        .unwrap_or(0)
 }
 
 #[subscribe(topic = "test.photon.e2e.ops", durable = "e2e-ops-handler")]
@@ -278,6 +343,15 @@ async fn seed_resource_access(
     )
     .await
     .expect("viewer can view the fixture subscription");
+    set_principal_role(
+        owner,
+        PHOTON_TOPIC,
+        &fixtures.orders_topic,
+        (PrincipalKind::User, "viewer"),
+        Role::View,
+    )
+    .await
+    .expect("viewer can view the orders topic");
 }
 
 async fn bootstrap_photon_fixtures(photon: &Photon) -> anyhow::Result<FixtureIds> {
@@ -309,7 +383,101 @@ async fn bootstrap_photon_fixtures(photon: &Photon) -> anyhow::Result<FixtureIds
         topic_name: E2E_TOPIC_NAME.into(),
         subscription_id: format!("{E2E_TOPIC_NAME}:{E2E_HANDLER_NAME}"),
         event_id,
+        ..FixtureIds::default()
     })
+}
+
+/// Orders: 27 single-key orders (one published by a person), three under one search key,
+/// and one whose payload is trimmed after `fraud-check` dead-letters it.
+async fn bootstrap_order_fixtures(
+    photon: &Photon,
+    storage: &InProcStoragePort,
+    fixtures: &mut FixtureIds,
+) -> anyhow::Result<()> {
+    use photon::StoragePort;
+
+    photon
+        .pause(&format!("{E2E_ORDERS_TOPIC}:warehouse"), "e2e")
+        .await?;
+    let system = serde_json::json!({"System": {"operation": "e2e_orders"}});
+    let person = serde_json::json!({"User": {"user_id": "ines"}});
+    let order = |key: &str, n: usize| {
+        serde_json::json!({
+            "order_id": key,
+            "customer_email": format!("customer{n}@example.com"),
+            "total_cents": 1000 + n,
+        })
+    };
+    let mut first_order = None;
+    for n in 1..=E2E_SINGLE_ORDERS {
+        let key = format!("ord-{n:04}");
+        let actor = if n == 1 {
+            person.clone()
+        } else {
+            system.clone()
+        };
+        let id = photon
+            .publish(E2E_ORDERS_TOPIC, Some(&key), actor, order(&key, n))
+            .await?;
+        if n == 1 {
+            first_order = Some((id, key));
+        }
+    }
+    for n in 0..E2E_SEARCH_ORDERS {
+        photon
+            .publish(
+                E2E_ORDERS_TOPIC,
+                Some(E2E_SEARCH_KEY),
+                system.clone(),
+                order(E2E_SEARCH_KEY, 100 + n),
+            )
+            .await?;
+    }
+    let expired_id = photon
+        .publish(
+            E2E_ORDERS_TOPIC,
+            Some(E2E_EXPIRED_KEY),
+            system.clone(),
+            order(E2E_EXPIRED_KEY, 999),
+        )
+        .await?;
+
+    // Let every handler run (fraud-check dead-letters each order), then commit checkpoints.
+    for _ in 0..300 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if !photon.dlq_for_event(&expired_id).is_empty()
+            && e2e_confirmations(E2E_EXPIRED_KEY) > 0
+            && e2e_confirmations("ord-0001") > 0
+        {
+            break;
+        }
+    }
+    photon
+        .runtime()
+        .executor_services
+        .checkpoint_coalescer
+        .flush()
+        .await?;
+    let expired = photon
+        .get_event(&expired_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("expired fixture missing before trim"))?;
+    storage
+        .truncate_before(E2E_ORDERS_TOPIC, Some(E2E_EXPIRED_KEY), expired.seq + 1)
+        .await?;
+    if photon.dlq_for_event(&expired_id).is_empty() {
+        anyhow::bail!("fraud-check must dead-letter the expired fixture");
+    }
+
+    let (order_event_id, order_key) =
+        first_order.ok_or_else(|| anyhow::anyhow!("no orders published"))?;
+    fixtures.orders_topic = E2E_ORDERS_TOPIC.into();
+    fixtures.order_event_id = order_event_id;
+    fixtures.order_key = order_key;
+    fixtures.search_key = E2E_SEARCH_KEY.into();
+    fixtures.orders_total = (E2E_SINGLE_ORDERS + E2E_SEARCH_ORDERS) as u64;
+    fixtures.expired_event_id = expired_id;
+    Ok(())
 }
 
 /// Build shared Valence/Higgs/Photon once and seed baseline fixtures.
@@ -362,7 +530,11 @@ pub async fn init_e2e_valence() {
             grant_photon_admin(&admin_ctx, "unverified").await;
             demote_admin_from_super_user(&system).await;
 
+            let storage = Arc::new(InProcStoragePort::new(
+                photon::TransportCrypto::from_env().expect("e2e transport key"),
+            ));
             let photon = Photon::builder()
+                .storage_port(Arc::clone(&storage) as Arc<dyn photon::StoragePort>)
                 .auto_registry()
                 .build()
                 .expect("e2e Photon");
@@ -371,9 +543,12 @@ pub async fn init_e2e_valence() {
                 .expect("start executor");
             configure(photon.clone());
 
-            let fixtures = bootstrap_photon_fixtures(&photon)
+            let mut fixtures = bootstrap_photon_fixtures(&photon)
                 .await
                 .expect("bootstrap photon fixtures");
+            bootstrap_order_fixtures(&photon, &storage, &mut fixtures)
+                .await
+                .expect("bootstrap order fixtures");
             seed_resource_access(&system, &admin_ctx, &photon, &fixtures).await;
             let photon = Arc::new(photon);
 
@@ -392,6 +567,7 @@ pub async fn init_e2e_valence() {
 
             Arc::new(E2eState {
                 router,
+                storage,
                 higgs,
                 photon,
                 default_backend_key: default_key,

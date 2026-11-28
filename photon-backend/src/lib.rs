@@ -140,19 +140,24 @@ mod types;
 mod validate;
 
 pub use mapping::{
-    compute_checkpoint_lag, count_since, dashboard_stats, event_detail_from_transport,
-    event_detail_transport_expired, event_summary_from_meta, event_summary_from_transport,
-    filter_subscriptions_by_topic, find_checkpoint_head_seq, find_checkpoint_seq,
-    find_subscription_by_id, find_topic_by_name, format_delivery_preview, sort_topics_by_name,
+    checkpoint_delivery_state, compute_checkpoint_lag, count_since, dashboard_stats,
+    event_detail_from_transport, event_detail_transport_expired, event_summary_from_meta,
+    event_summary_from_transport, filter_subscriptions_by_topic, find_checkpoint_head_seq,
+    find_checkpoint_seq, find_subscription_by_id, find_topic_by_name, format_delivery_preview,
+    mask_payload, mask_values, payload_fields, personal_values, published_by, sort_topics_by_name,
     subscription_summary_from_handler, topic_summary, CheckpointRow,
 };
 pub use types::{
-    DashboardStats, EventDetail, EventSummary, PhotonIdError, SubscriptionSummary, TopicSummary,
+    DashboardStats, DeliveryRow, DeliveryState, EventDetail, EventSummary, EventsPage, EventsQuery,
+    EventsRange, PayloadField, PhotonIdError, PublishedBy, RevealReason, RevealRecordRow,
+    RevealedFields, SubscriptionSummary, TopicSummary, EVENTS_PAGE_SIZE, MASKED_VALUE,
+    MAX_EVENTS_PAGE,
 };
 pub use validate::{
-    clamp_event_list_limit, encode_ops_path_segment, photon_event_path, photon_subscription_path,
-    photon_topic_path, validate_event_id, validate_subscription_id, validate_topic_name,
-    MAX_EVENT_LIST_LIMIT, MAX_PHOTON_ID_CHARS,
+    clamp_event_list_limit, clamp_events_page, encode_ops_path_segment, events_window,
+    normalize_events_search, photon_event_path, photon_subscription_path, photon_topic_path,
+    validate_event_id, validate_subscription_id, validate_topic_name, EventsQueryError,
+    MAX_EVENTS_RANGE_DAYS, MAX_EVENT_LIST_LIMIT, MAX_PHOTON_ID_CHARS,
 };
 
 #[cfg(test)]
@@ -382,7 +387,222 @@ mod tests {
             event_detail_transport_expired("e1", "t", None, 1, "2026-01-01T00:00:00Z", "delivered");
         assert!(detail.transport_expired);
         assert!(detail.payload_json.is_null());
-        assert!(detail.actor_json.is_null());
+        assert_eq!(detail.published_by, PublishedBy::Anonymous);
+        assert!(!detail.has_personal());
+    }
+
+    #[test]
+    fn event_detail_masks_personal_fields_and_actor_happy_path() {
+        let payload = serde_json::json!({
+            "order_id": "ord-1",
+            "customer_email": "ines@example.com",
+            "total_cents": 4200,
+        });
+        let actor = serde_json::json!({"User": {"user_id": "ines"}});
+        let detail = event_detail_from_transport(
+            "e1",
+            "orders",
+            Some("ord-1".into()),
+            3,
+            "2026-01-01T00:00:00Z",
+            &payload,
+            &actor,
+            &["customer_email"],
+        );
+        let wire = serde_json::to_string(&detail).expect("serialize");
+        assert!(
+            !wire.contains("ines@example.com"),
+            "personal value leaked: {wire}"
+        );
+        assert!(!wire.contains("\"ines\""), "publisher id leaked: {wire}");
+        assert_eq!(detail.payload_json["customer_email"], MASKED_VALUE);
+        assert_eq!(detail.payload_json["total_cents"], 4200);
+        assert_eq!(detail.published_by, PublishedBy::Person);
+        assert!(detail.has_personal());
+        let email = detail
+            .fields
+            .iter()
+            .find(|f| f.name == "customer_email")
+            .expect("email row");
+        assert!(email.personal && email.value.is_none());
+        let total = detail
+            .fields
+            .iter()
+            .find(|f| f.name == "total_cents")
+            .expect("total");
+        assert_eq!(total.value.as_deref(), Some("4200"));
+    }
+
+    #[test]
+    fn payload_fields_reveal_shows_personal_values() {
+        let payload = serde_json::json!({"customer_email": "a@b.c", "n": 1});
+        let rows = payload_fields(&payload, &["customer_email"], true);
+        assert_eq!(rows[0].value.as_deref(), Some("a@b.c"));
+        assert!(rows[0].personal);
+        assert_eq!(payload_fields(&serde_json::Value::Null, &[], false), vec![]);
+        let scalar = payload_fields(&serde_json::json!(7), &[], false);
+        assert_eq!(scalar[0].name, "value");
+    }
+
+    #[test]
+    fn handler_errors_lose_personal_values() {
+        let payload = serde_json::json!({"customer_email": "a@b.c", "n": 7});
+        let actor = serde_json::json!({"User": {"user_id": "ines"}});
+        let values = personal_values(&payload, &actor, &["customer_email"]);
+        assert_eq!(values, vec!["a@b.c".to_string(), "ines".to_string()]);
+        let masked = mask_values("invalid email a@b.c for ines", &values);
+        assert_eq!(
+            masked,
+            format!("invalid email {MASKED_VALUE} for {MASKED_VALUE}")
+        );
+        assert_eq!(mask_values("no match", &values), "no match");
+    }
+
+    #[test]
+    fn published_by_reads_valence_actor_shapes() {
+        let person = published_by(&serde_json::json!({"User": {"user_id": "u1"}}));
+        assert_eq!(person, (PublishedBy::Person, Some("u1".into())));
+        let system = published_by(&serde_json::json!({"System": {"operation": "job"}}));
+        assert_eq!(system.0, PublishedBy::System);
+        let bot = published_by(&serde_json::json!({"ServiceUser": {"service_name": "svc"}}));
+        assert_eq!(bot.0, PublishedBy::System);
+        assert_eq!(
+            published_by(&serde_json::json!("Anonymous")).0,
+            PublishedBy::Anonymous
+        );
+        assert_eq!(
+            published_by(&serde_json::Value::Null).0,
+            PublishedBy::Anonymous
+        );
+    }
+
+    #[test]
+    fn checkpoint_delivery_state_handled_and_waiting() {
+        assert_eq!(
+            checkpoint_delivery_state(3, Some(5)),
+            DeliveryState::Handled
+        );
+        assert_eq!(
+            checkpoint_delivery_state(5, Some(5)),
+            DeliveryState::Handled
+        );
+        assert_eq!(
+            checkpoint_delivery_state(7, Some(5)),
+            DeliveryState::Waiting { position: 2 }
+        );
+        assert_eq!(
+            checkpoint_delivery_state(1, None),
+            DeliveryState::Waiting { position: 1 }
+        );
+    }
+
+    fn query(range: EventsRange, from: Option<&str>, to: Option<&str>) -> EventsQuery {
+        EventsQuery {
+            range,
+            from: from.map(Into::into),
+            to: to.map(Into::into),
+            ..EventsQuery::default()
+        }
+    }
+
+    #[test]
+    fn events_window_presets_and_custom_days() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-24T12:00:00Z")
+            .expect("now")
+            .with_timezone(&chrono::Utc);
+        let (since, until) =
+            events_window(&query(EventsRange::LastHour, None, None), now).expect("last hour");
+        assert_eq!(now - since, chrono::Duration::hours(1));
+        assert!(until.is_none());
+        let (since, until) = events_window(
+            &query(EventsRange::Custom, Some("2026-11-20"), Some("2026-11-21")),
+            now,
+        )
+        .expect("custom");
+        assert_eq!(since.to_rfc3339(), "2026-11-20T00:00:00+00:00");
+        assert_eq!(
+            until.expect("until").to_rfc3339(),
+            "2026-11-22T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn events_window_rejects_bad_custom_ranges() {
+        let now = chrono::Utc::now();
+        let err = |from, to| events_window(&query(EventsRange::Custom, from, to), now);
+        assert_eq!(
+            err(None, Some("2026-11-21")),
+            Err(EventsQueryError::MissingDates)
+        );
+        assert_eq!(
+            err(Some("21/11/2026"), Some("2026-11-21")),
+            Err(EventsQueryError::BadDate)
+        );
+        assert_eq!(
+            err(Some("2026-11-22"), Some("2026-11-21")),
+            Err(EventsQueryError::FromAfterTo)
+        );
+        assert_eq!(
+            err(Some("2024-01-01"), Some("2026-11-21")),
+            Err(EventsQueryError::RangeTooLong)
+        );
+    }
+
+    #[test]
+    fn events_page_and_search_limits() {
+        assert_eq!(clamp_events_page(0), 1);
+        assert_eq!(clamp_events_page(3), 3);
+        assert_eq!(clamp_events_page(10_000), MAX_EVENTS_PAGE);
+        assert_eq!(normalize_events_search(Some("  ")), Ok(None));
+        assert_eq!(normalize_events_search(Some(" ord-1 ")), Ok(Some("ord-1")));
+        let long = "x".repeat(MAX_PHOTON_ID_CHARS + 1);
+        assert_eq!(
+            normalize_events_search(Some(&long)),
+            Err(EventsQueryError::SearchTooLong)
+        );
+    }
+
+    #[test]
+    fn events_query_url_round_trip() {
+        let query = EventsQuery {
+            topic: Some("orders.created".into()),
+            q: Some("ord 1/2".into()),
+            range: EventsRange::Custom,
+            from: Some("2026-11-20".into()),
+            to: Some("2026-11-21".into()),
+            page: 2,
+        };
+        let qs = query.to_query_string();
+        assert_eq!(
+            qs,
+            "q=ord%201%2F2&topic=orders.created&range=custom&from=2026-11-20&to=2026-11-21&page=2"
+        );
+        let decoded: std::collections::HashMap<&str, String> = [
+            ("q", "ord 1/2"),
+            ("topic", "orders.created"),
+            ("range", "custom"),
+            ("from", "2026-11-20"),
+            ("to", "2026-11-21"),
+            ("page", "2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
+        assert_eq!(EventsQuery::from_params(|k| decoded.get(k).cloned()), query);
+        assert_eq!(EventsQuery::from_params(|_| None).to_query_string(), "");
+        let junk = EventsQuery::from_params(|k| (k == "page" || k == "range").then(|| "x".into()));
+        assert_eq!((junk.page, junk.range), (1, EventsRange::Last24h));
+    }
+
+    #[test]
+    fn events_range_params_round_trip() {
+        for range in EventsRange::ALL {
+            assert_eq!(EventsRange::from_param(range.as_param()), Some(range));
+        }
+        assert_eq!(EventsRange::from_param("forever"), None);
+        for reason in RevealReason::ALL {
+            assert_eq!(RevealReason::parse(reason.as_str()), Some(reason));
+        }
     }
 
     #[test]

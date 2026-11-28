@@ -1,7 +1,9 @@
 //! Blank-id rejection, unsafe-id rejection, event-list limit capping, and
 //! path-segment encoding for ops UI hrefs.
 
-use crate::types::PhotonIdError;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+
+use crate::types::{EventsQuery, EventsRange, PhotonIdError, MAX_EVENTS_PAGE};
 
 /// Maximum events returned by a single `get_events` / `get_recent_events` call.
 pub const MAX_EVENT_LIST_LIMIT: u32 = 100;
@@ -94,6 +96,105 @@ pub fn validate_event_id(id: &str) -> Result<(), PhotonIdError> {
 pub fn clamp_event_list_limit(limit: u32) -> usize {
     limit.min(MAX_EVENT_LIST_LIMIT) as usize
 }
+
+/// Longest custom range the Events list accepts, in days.
+pub const MAX_EVENTS_RANGE_DAYS: i64 = 366;
+
+/// Clamp a requested Events page to `1..=MAX_EVENTS_PAGE`.
+#[must_use]
+pub fn clamp_events_page(page: u32) -> u32 {
+    page.clamp(1, MAX_EVENTS_PAGE)
+}
+
+/// Trimmed search text, or `None` when blank. Longer than [`MAX_PHOTON_ID_CHARS`] is an error.
+///
+/// # Errors
+///
+/// [`EventsQueryError::SearchTooLong`] for oversized input.
+pub fn normalize_events_search(q: Option<&str>) -> Result<Option<&str>, EventsQueryError> {
+    let Some(q) = q.map(str::trim).filter(|q| !q.is_empty()) else {
+        return Ok(None);
+    };
+    if q.chars().count() > MAX_PHOTON_ID_CHARS {
+        return Err(EventsQueryError::SearchTooLong);
+    }
+    Ok(Some(q))
+}
+
+/// Half-open time window `[since, until)` for an Events query; `until` is `None` for "now".
+///
+/// Custom ranges cover whole UTC days, `from` through `to` inclusive.
+///
+/// # Errors
+///
+/// An [`EventsQueryError`] when a custom range is missing a day, a day doesn't parse as
+/// `YYYY-MM-DD`, `from` is after `to`, or the range is longer than
+/// [`MAX_EVENTS_RANGE_DAYS`].
+pub fn events_window(
+    query: &EventsQuery,
+    now: DateTime<Utc>,
+) -> Result<(DateTime<Utc>, Option<DateTime<Utc>>), EventsQueryError> {
+    match query.range {
+        EventsRange::LastHour => Ok((now - Duration::hours(1), None)),
+        EventsRange::Last24h => Ok((now - Duration::hours(24), None)),
+        EventsRange::Last7d => Ok((now - Duration::days(7), None)),
+        EventsRange::Custom => {
+            let day = |raw: Option<&String>| -> Result<NaiveDate, EventsQueryError> {
+                let raw = raw
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .ok_or(EventsQueryError::MissingDates)?;
+                NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| EventsQueryError::BadDate)
+            };
+            let from = day(query.from.as_ref())?;
+            let to = day(query.to.as_ref())?;
+            if from > to {
+                return Err(EventsQueryError::FromAfterTo);
+            }
+            if (to - from).num_days() >= MAX_EVENTS_RANGE_DAYS {
+                return Err(EventsQueryError::RangeTooLong);
+            }
+            let until = to.succ_opt().ok_or(EventsQueryError::BadDate)?;
+            Ok((
+                from.and_time(chrono::NaiveTime::MIN).and_utc(),
+                Some(until.and_time(chrono::NaiveTime::MIN).and_utc()),
+            ))
+        }
+    }
+}
+
+/// An Events query the server refuses before reading Photon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EventsQueryError {
+    /// A custom range without both days.
+    MissingDates,
+    /// A day that isn't `YYYY-MM-DD`.
+    BadDate,
+    /// The first day is after the last.
+    FromAfterTo,
+    /// The range is longer than [`MAX_EVENTS_RANGE_DAYS`].
+    RangeTooLong,
+    /// The search text is longer than [`MAX_PHOTON_ID_CHARS`].
+    SearchTooLong,
+}
+
+impl std::fmt::Display for EventsQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingDates => write!(f, "Pick both days for a custom range"),
+            Self::BadDate => write!(f, "Dates must look like 2026-11-24"),
+            Self::FromAfterTo => write!(f, "The first day must come before the last"),
+            Self::RangeTooLong => write!(
+                f,
+                "A custom range can cover at most {MAX_EVENTS_RANGE_DAYS} days"
+            ),
+            Self::SearchTooLong => write!(f, "Search text is too long"),
+        }
+    }
+}
+
+impl std::error::Error for EventsQueryError {}
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
