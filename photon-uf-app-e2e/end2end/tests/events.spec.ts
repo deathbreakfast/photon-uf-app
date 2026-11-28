@@ -51,7 +51,7 @@ test.describe("e2e.events.client_nav", () => {
 
   test("e2e.events.client_nav_index_fetches_events", async ({ page }) => {
     await openDashboard(page);
-    const getEvents = page.waitForRequest((req) => /get_waiting_events/i.test(req.url()), {
+    const getEvents = page.waitForRequest((req) => /get_events/i.test(req.url()), {
       timeout: 20_000,
     });
     await page.getByTestId("photon-dashboard").getByRole("button", { name: /View All/ }).first().click();
