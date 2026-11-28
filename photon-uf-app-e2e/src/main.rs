@@ -9,7 +9,7 @@ use axum::Router;
 use leptos::config::get_configuration;
 use leptos::prelude::provide_context;
 use leptos_axum::{generate_route_list, LeptosRoutes};
-use photon_uf_app_e2e::seed::seed_data;
+use photon_uf_app_e2e::seed::{publish_events, seed_data};
 use photon_uf_app_e2e::{
     e2e_higgs_config, e2e_photon, e2e_router, init_e2e_valence, inject_e2e_session_snapshot, shell,
     wire_gauge_permissions_bridge, App,
@@ -53,6 +53,7 @@ async fn serve() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(|| async { axum::http::StatusCode::OK }))
         .route("/api/test/seed-data", post(seed_data))
+        .route("/api/test/publish", post(publish_events))
         .nest_service("/pkg", ServeDir::new(pkg_dir))
         .nest_service("/fonts", ServeDir::new(fonts_dir))
         .leptos_routes_with_context(
@@ -61,6 +62,7 @@ async fn serve() -> anyhow::Result<()> {
             move || {
                 provide_context::<std::sync::Arc<higgs::HiggsConfig>>(higgs.clone());
                 provide_context::<std::sync::Arc<photon::Photon>>(photon.clone());
+                provide_context(photon_app::StallAfter(photon_uf_app_e2e::E2E_STALL_AFTER));
                 wire_gauge_permissions_bridge();
             },
             move || shell(leptos_options_for_routes.clone()),

@@ -43,6 +43,9 @@ pub const PHOTON_TOPIC_KIND: &str = "photon_topic";
 /// Resource kind prefix for one Photon subscription.
 pub const PHOTON_SUBSCRIPTION_KIND: &str = "photon_subscription";
 
+/// Owner shown for a topic or subscription whose only owner is the default admin group.
+pub const DEFAULT_OWNER_LABEL: &str = "Photon admins";
+
 /// What the list pages show for a resource the reader holds nothing on.
 pub const NO_ACCESS: &str = "No access";
 

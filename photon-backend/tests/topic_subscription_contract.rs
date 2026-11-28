@@ -32,6 +32,7 @@ fn sample_sub(id: &str, topic: &str, enabled: bool, head_seq: Option<i64>) -> Su
         checkpoint_lag: compute_checkpoint_lag(head_seq, last_seq),
         last_seq,
         last_processed_at: None,
+        ..SubscriptionSummary::default()
     }
 }
 

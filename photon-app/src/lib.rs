@@ -117,10 +117,13 @@
 //!
 //! ## Browse subscriptions
 //!
-//! Subscription pages show delivery handlers, checkpoint lag, and topic attachment.
-//! [`PhotonSubscriptionsIndexPage`] loads [`get_subscriptions`]; [`PhotonSubscriptionDetailPage`]
-//! calls [`get_subscription`] plus filtered events for one handler id. Use these routes
-//! when operators trace which consumers are attached to a topic or inspect lag.
+//! Subscription pages show each handler's health in words (Healthy, Catching up, Stalled,
+//! Failing, Paused, Not started), how many events wait and how long, and when it last handled
+//! one. [`PhotonSubscriptionsIndexPage`] loads [`get_subscriptions`], sorted worst first;
+//! [`PhotonSubscriptionDetailPage`] calls [`get_subscription`] and [`get_waiting_events`] for
+//! one handler id and offers [`pause_subscription`], [`resume_subscription`],
+//! [`replay_subscription`], [`retry_subscription_now`] and [`skip_subscription_to_latest`] to
+//! readers whose role allows them. Hosts can set the Stalled threshold with [`StallAfter`].
 //!
 //! **Prerequisites:** Routes mounted; subscription ids must pass
 //! `photon_backend::validate_subscription_id`.
@@ -136,7 +139,7 @@
 //! assert_eq!(subs.first().map(|s| s.sub.subscription_id.as_str()), Some("reg.key"));
 //!
 //! let detail = get_subscription("reg.key".into()).await?;
-//! assert_eq!(detail.subscription_id, "reg.key");
+//! assert_eq!(detail.map(|row| row.sub.subscription_id).as_deref(), Some("reg.key"));
 //! ```
 //!
 //! On success the index lists [`SubscriptionRow`]s from the admin snapshot and detail resolves
@@ -240,7 +243,9 @@ pub use pages::{
 };
 pub use server::{
     get_dashboard_stats, get_event, get_events, get_recent_events, get_subscription,
-    get_subscriptions, get_topic, get_topics, DashboardStats, EventDetail, EventSummary,
+    get_subscriptions, get_topic, get_topics, get_waiting_events, pause_subscription,
+    replay_preview, replay_subscription, resume_subscription, retry_subscription_now,
+    skip_subscription_to_latest, DashboardStats, EventDetail, EventSummary, StallAfter,
     SubscriptionRow, SubscriptionSummary, TopicRow, TopicSummary, PHOTON_ADMIN_PERMISSION,
 };
 

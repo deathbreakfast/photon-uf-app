@@ -68,4 +68,5 @@ allow-git = [
     # Resource access ships on these forks first; drop with the [patch] entries in Cargo.toml.
     "https://github.com/deathbreakfast/gauge",
     "https://github.com/deathbreakfast/unified-field-product",
+    "https://github.com/deathbreakfast/photon",
 ]

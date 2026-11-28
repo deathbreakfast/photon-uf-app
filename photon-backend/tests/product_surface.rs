@@ -137,6 +137,34 @@ fn ops_reads_gate_per_resource_happy_path() {
     for (fn_name, gate) in [
         ("get_topic", r#"require_topic(&topic_name, "View")"#),
         ("get_subscription", r#"require_subscription(&id, "View")"#),
+        (
+            "get_waiting_events",
+            r#"require_subscription(&subscription_id, "View")"#,
+        ),
+        (
+            "pause_subscription",
+            r#"require_subscription(&subscription_id, "Edit")"#,
+        ),
+        (
+            "resume_subscription",
+            r#"require_subscription(&subscription_id, "Edit")"#,
+        ),
+        (
+            "skip_subscription_to_latest",
+            r#"require_subscription(&subscription_id, "Edit")"#,
+        ),
+        (
+            "replay_preview",
+            r#"require_subscription(&subscription_id, "Run")"#,
+        ),
+        (
+            "replay_subscription",
+            r#"require_subscription(&subscription_id, "Run")"#,
+        ),
+        (
+            "retry_subscription_now",
+            r#"require_subscription(&subscription_id, "Run")"#,
+        ),
         ("get_events", r#"require_topic(topic, "View")"#),
         ("get_event", r#"require_topic(&event.topic_name, "View")"#),
     ] {
@@ -306,7 +334,7 @@ fn detail_pages_testid_and_bindings_happy_path() {
     for needle in [
         "photon-subscription-detail",
         "get_subscription",
-        "get_events",
+        "get_waiting_events",
     ] {
         assert!(
             subscription.contains(needle),
@@ -424,13 +452,13 @@ fn lazy_routes_wire_pages_happy_path() {
 fn ops_path_helpers_encode_segments_happy_path() {
     let events_table = read_app("components/events_table.rs");
     let topic_card = read_app("components/topic_card.rs");
-    let sub_card = read_app("components/subscription_card.rs");
+    let subs_page = read_app("pages/subscriptions.rs");
     let topic_subs = read_app("components/topic_subscriptions_table.rs");
     let active_subs = read_app("components/active_subscriptions_table.rs");
     for (label, src) in [
         ("events_table", events_table.as_str()),
         ("topic_card", topic_card.as_str()),
-        ("subscription_card", sub_card.as_str()),
+        ("subscriptions page", subs_page.as_str()),
         ("topic_subscriptions_table", topic_subs.as_str()),
         ("active_subscriptions_table", active_subs.as_str()),
     ] {

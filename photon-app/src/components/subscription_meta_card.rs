@@ -2,27 +2,20 @@
 
 use leptos::prelude::*;
 use orbital::components::{
-    Body1, Caption1Strong, Card, CardContent, CardHeader, CardHeaderAction, Grid, GridConfig,
-    GridItem, Link, Skeleton, SkeletonItem, Subtitle2, Text, TextFont,
+    Body1, Caption1Strong, Card, CardContent, CardHeader, Grid, GridConfig, GridItem, Skeleton,
+    SkeletonItem, Subtitle2, Text, TextFont,
 };
 use orbital::primitives::{Flex, FlexGap};
 
-use crate::components::SubscriptionStatusBadge;
 use crate::server::SubscriptionSummary;
 
 /// Field labels in grid order; shared with [`SubscriptionMetaCardSkeleton`].
-const LABELS: [&str; 6] = [
-    "Id",
-    "Topic",
-    "Mode",
-    "Key filter",
-    "Checkpoint lag",
-    "Last seq",
-];
+const LABELS: [&str; 5] = ["Mode", "Key filter", "Checkpoint", "Lag", "Id"];
 
 /// Readable dispatch mode: `durable` and `consumer_group` get labels, anything
 /// else shows as stored.
-fn mode_label(mode: &str) -> String {
+#[must_use]
+pub fn mode_label(mode: &str) -> String {
     match mode {
         "durable" => "Durable".to_string(),
         "consumer_group" => "Consumer group".to_string(),
@@ -35,16 +28,14 @@ fn key_filter_label(filter: Option<&str>) -> String {
 }
 
 fn lag_label(lag: i64, last_seq: Option<i64>) -> String {
-    match (last_seq, lag) {
-        (None, _) => "Not started".to_string(),
-        (Some(_), 0) => "Up to date".to_string(),
-        (Some(_), 1) => "1 event behind".to_string(),
-        (Some(_), n) => format!("{n} events behind"),
+    match last_seq {
+        None if lag == 0 => "Not started".to_string(),
+        _ => photon_backend::lag_words(lag),
     }
 }
 
-fn last_seq_label(last_seq: Option<i64>) -> String {
-    last_seq.map_or_else(|| "No checkpoint yet".to_string(), |s| s.to_string())
+fn checkpoint_label(last_seq: Option<i64>) -> String {
+    last_seq.map_or_else(|| "No checkpoint yet".to_string(), |s| format!("Seq {s}"))
 }
 
 /// One label/value cell of the details grid.
@@ -59,37 +50,28 @@ fn field(label: &'static str, value: AnyView) -> impl IntoView {
     }
 }
 
-/// Renders the subscription's details: a "Details" header with the status
-/// badge, then a two-column grid of id, topic, mode, key filter, checkpoint
-/// lag, and last seq.
+/// Renders the subscription's details: a "Details" header, then a two-column grid of mode,
+/// key filter, checkpoint, lag in words, and id.
 #[component]
 pub fn SubscriptionMetaCard(
     /// Subscription data to display.
     sub: SubscriptionSummary,
 ) -> impl IntoView {
-    let values: [AnyView; 6] = [
-        view! { <Text font=TextFont::Monospace block=true>{sub.subscription_id.clone()}</Text> }
-            .into_any(),
-        view! {
-            <Body1 block=true>
-                <Link href=photon_backend::photon_topic_path(&sub.topic_name)>{sub.topic_name.clone()}</Link>
-            </Body1>
-        }
-        .into_any(),
+    let values: [AnyView; 5] = [
         view! { <Body1 block=true>{mode_label(&sub.mode)}</Body1> }.into_any(),
         view! { <Body1 block=true>{key_filter_label(sub.topic_key_filter.as_deref())}</Body1> }
             .into_any(),
-        view! { <Body1 block=true>{lag_label(sub.checkpoint_lag, sub.last_seq)}</Body1> }.into_any(),
-        view! { <Body1 block=true>{last_seq_label(sub.last_seq)}</Body1> }.into_any(),
+        view! { <Body1 block=true>{checkpoint_label(sub.last_seq)}</Body1> }.into_any(),
+        view! { <Body1 block=true>{lag_label(sub.checkpoint_lag, sub.last_seq)}</Body1> }
+            .into_any(),
+        view! { <Text font=TextFont::Monospace block=true>{sub.subscription_id.clone()}</Text> }
+            .into_any(),
     ];
     view! {
         <div data-testid="photon-subscription-meta">
             <Card>
                 <CardHeader>
                     <Subtitle2>"Details"</Subtitle2>
-                    <CardHeaderAction slot>
-                        <SubscriptionStatusBadge enabled=sub.enabled />
-                    </CardHeaderAction>
                 </CardHeader>
                 <CardContent>
                     // Cells are built inside Grid: GridItem reads Grid's context.
@@ -107,10 +89,10 @@ pub fn SubscriptionMetaCard(
 }
 
 /// [`SubscriptionMetaCard`] while the subscription loads: the header and all
-/// six labels render at once, and only the values are placeholders.
+/// five labels render at once, and only the values are placeholders.
 #[component]
 pub fn SubscriptionMetaCardSkeleton() -> impl IntoView {
-    let widths = ["220px", "120px", "90px", "60px", "80px", "40px"];
+    let widths = ["90px", "60px", "60px", "100px", "220px"];
 
     view! {
         <Skeleton attr:data-testid="photon-subscription-meta-skeleton">
@@ -152,15 +134,15 @@ mod tests {
     #[test]
     fn lag_label_covers_no_checkpoint_zero_and_behind() {
         assert_eq!(lag_label(0, None), "Not started");
-        assert_eq!(lag_label(12, None), "Not started");
+        assert_eq!(lag_label(12, None), "12 events behind");
         assert_eq!(lag_label(0, Some(7)), "Up to date");
         assert_eq!(lag_label(1, Some(7)), "1 event behind");
         assert_eq!(lag_label(41, Some(7)), "41 events behind");
     }
 
     #[test]
-    fn last_seq_label_says_when_there_is_no_checkpoint() {
-        assert_eq!(last_seq_label(None), "No checkpoint yet");
-        assert_eq!(last_seq_label(Some(42)), "42");
+    fn checkpoint_label_says_when_there_is_no_checkpoint() {
+        assert_eq!(checkpoint_label(None), "No checkpoint yet");
+        assert_eq!(checkpoint_label(Some(55)), "Seq 55");
     }
 }

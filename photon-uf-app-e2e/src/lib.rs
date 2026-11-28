@@ -16,6 +16,7 @@ pub use app::{shell, wire_gauge_permissions_bridge, App};
 #[cfg(feature = "ssr")]
 pub use e2e_valence::{
     e2e_fixtures, e2e_higgs_config, e2e_photon, e2e_router, e2e_system_valence, init_e2e_valence,
+    E2E_STALL_AFTER,
 };
 #[cfg(feature = "ssr")]
 pub use gate_demos::inject_e2e_session_snapshot;

@@ -169,3 +169,13 @@ uf-integrations = { git = "https://github.com/deathbreakfast/unified-field-produ
 uf-product = { git = "https://github.com/deathbreakfast/unified-field-product", branch = "main" }
 uf-product-macros = { git = "https://github.com/deathbreakfast/unified-field-product", branch = "main" }
 uf-search-core = { git = "https://github.com/deathbreakfast/unified-field-product", branch = "main" }
+
+# Subscription health and control (pause, replay, skip, retry) are on the deathbreakfast
+# photon fork's main ahead of unified-field-dev. Drop this once it lands there.
+[patch."https://github.com/unified-field-dev/photon"]
+uf-photon = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+uf-photon-core = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-backend = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-macros = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-runtime = { git = "https://github.com/deathbreakfast/photon", branch = "main" }
+photon-telemetry = { git = "https://github.com/deathbreakfast/photon", branch = "main" }

@@ -8,13 +8,17 @@ use std::sync::Arc;
 
 use photon::Photon;
 
+use chrono::{DateTime, Utc};
+
 use crate::{
-    clamp_event_list_limit, count_since, dashboard_stats, event_detail_from_transport,
-    event_summary_from_transport, find_checkpoint_head_seq, find_checkpoint_seq,
+    aggregate_checkpoints, clamp_event_list_limit, clamp_waiting_limit, count_since,
+    dashboard_stats, event_detail_from_transport, event_summary_from_transport,
     find_subscription_by_id, find_topic_by_name, sort_topics_by_name,
-    subscription_summary_from_handler, topic_summary, validate_event_id, validate_subscription_id,
-    validate_topic_name, CheckpointRow, DashboardStats, EventDetail, EventSummary, PhotonIdError,
-    SubscriptionSummary, TopicSummary,
+    subscription_summary_from_snapshot, topic_summary, validate_event_id, validate_replay_point,
+    validate_subscription_id, validate_topic_name, CheckpointAggregate, CheckpointState,
+    DashboardStats, EventDetail, EventSummary, HandlerSnapshot, PhotonIdError, ReplayPoint,
+    ReplayPointError, ReplayPreviewSummary, SubscriptionSummary, TopicSummary, WaitingEvents,
+    DEFAULT_STALL_AFTER,
 };
 
 /// Operator-facing ops failure (maps to `ServerFnError` at the Leptos boundary).
@@ -28,6 +32,12 @@ pub enum OpsError {
     PermissionDenied,
     /// Path/query id failed validation.
     InvalidId(PhotonIdError),
+    /// Replay start point failed validation.
+    InvalidReplayPoint(ReplayPointError),
+    /// The subscription id names no handler.
+    SubscriptionNotFound,
+    /// The installed backend can't pause, replay or skip.
+    ControlUnsupported,
     /// Photon IO or snapshot failure with operation context.
     PhotonIo {
         /// Stable operation name for logs and operator messages.
@@ -44,6 +54,12 @@ impl std::fmt::Display for OpsError {
             Self::PhotonNotInContext => write!(f, "Photon not in request context"),
             Self::PermissionDenied => write!(f, "Permission denied"),
             Self::InvalidId(e) => write!(f, "{e}"),
+            Self::InvalidReplayPoint(e) => write!(f, "{e}"),
+            Self::SubscriptionNotFound => write!(f, "Photon subscription not found"),
+            Self::ControlUnsupported => write!(
+                f,
+                "This Photon backend can't pause, replay or skip subscriptions"
+            ),
             Self::PhotonIo { operation, detail } => write!(f, "Failed to {operation}: {detail}"),
         }
     }
@@ -64,6 +80,21 @@ fn len_as_u32(len: usize) -> Result<u32, OpsError> {
 }
 
 impl std::error::Error for OpsError {}
+
+impl From<ReplayPointError> for OpsError {
+    fn from(value: ReplayPointError) -> Self {
+        Self::InvalidReplayPoint(value)
+    }
+}
+
+/// Maps a Photon control error, keeping not-found and unsupported apart from IO failures.
+fn control_err(operation: &'static str, e: photon::PhotonError) -> OpsError {
+    match e {
+        photon::PhotonError::SubscriptionNotFound(_) => OpsError::SubscriptionNotFound,
+        photon::PhotonError::Unsupported(_) => OpsError::ControlUnsupported,
+        other => photon_io_err(operation, other),
+    }
+}
 
 impl From<PhotonIdError> for OpsError {
     fn from(value: PhotonIdError) -> Self {
@@ -104,39 +135,66 @@ fn map_transport_event(ev: &photon::Event) -> EventSummary {
     )
 }
 
-/// Handler inventory + checkpoints via `admin_snapshot`.
+/// Handler inventory, checkpoints and health via `admin_snapshot`, in registry order.
+///
+/// Health uses [`DEFAULT_STALL_AFTER`]; see [`list_subscriptions_at`] to pick the threshold.
 pub async fn list_subscriptions(photon: &Photon) -> Result<Vec<SubscriptionSummary>, OpsError> {
+    list_subscriptions_at(photon, Utc::now(), DEFAULT_STALL_AFTER).await
+}
+
+/// [`list_subscriptions`] with an explicit clock and stall threshold.
+pub async fn list_subscriptions_at(
+    photon: &Photon,
+    now: DateTime<Utc>,
+    stall_after: chrono::Duration,
+) -> Result<Vec<SubscriptionSummary>, OpsError> {
     let snap = photon
         .admin_snapshot()
         .await
         .map_err(|e| photon_io_err("load admin snapshot", e))?;
-    let checkpoints: Vec<CheckpointRow> = snap
+    let checkpoints: Vec<CheckpointState> = snap
         .checkpoints
         .iter()
-        .map(|c| {
-            (
-                c.subscription_name.clone(),
-                c.topic_name.clone(),
-                c.topic_key.clone(),
-                c.last_seq,
-                c.head_seq,
-            )
+        .map(|c| CheckpointState {
+            subscription_name: c.subscription_name.clone(),
+            topic_name: c.topic_name.clone(),
+            topic_key: c.topic_key.clone(),
+            last_seq: c.last_seq,
+            head_seq: c.head_seq,
+            oldest_waiting_at: c.oldest_waiting_at,
         })
         .collect();
-
+    let supports_control = snap.backend.supports_subscription_control;
+    let retention_secs = snap.backend.max_replay_window_secs;
     let mut list = Vec::with_capacity(snap.handlers.len());
     for h in snap.handlers {
-        let last_seq =
-            find_checkpoint_seq(&checkpoints, h.subscription_name.as_deref(), &h.topic_name);
-        let head_seq =
-            find_checkpoint_head_seq(&checkpoints, h.subscription_name.as_deref(), &h.topic_name);
-        list.push(subscription_summary_from_handler(
-            h.registry_key,
-            h.subscription_name.or(h.consumer_group),
-            h.topic_name,
-            h.mode,
-            last_seq,
-            head_seq,
+        let name = h.subscription_name.or(h.consumer_group);
+        let checkpoint = name
+            .as_deref()
+            .map_or_else(CheckpointAggregate::default, |n| {
+                aggregate_checkpoints(&checkpoints, n, &h.topic_name)
+            });
+        let health = h.health;
+        list.push(subscription_summary_from_snapshot(
+            HandlerSnapshot {
+                registry_key: h.registry_key,
+                subscription_name: name,
+                topic_name: h.topic_name,
+                mode: h.mode,
+                checkpoint,
+                last_handled_at: health.last_handled_at,
+                failures_24h: health.failures_24h,
+                last_error: health.last_error,
+                last_error_at: health.last_error_at,
+                retrying: health
+                    .retrying
+                    .map(|r| (r.event_id, r.attempt, r.next_retry_at)),
+                paused: health.paused.map(|p| (p.by, p.at)),
+                supports_control,
+                retention_secs,
+            },
+            now,
+            stall_after,
         ));
     }
     Ok(list)
@@ -222,9 +280,145 @@ pub async fn load_subscription(
     photon: &Photon,
     id: &str,
 ) -> Result<Option<SubscriptionSummary>, OpsError> {
+    load_subscription_at(photon, id, Utc::now(), DEFAULT_STALL_AFTER).await
+}
+
+/// [`load_subscription`] with an explicit clock and stall threshold.
+pub async fn load_subscription_at(
+    photon: &Photon,
+    id: &str,
+    now: DateTime<Utc>,
+    stall_after: chrono::Duration,
+) -> Result<Option<SubscriptionSummary>, OpsError> {
     validate_subscription_id(id)?;
-    let subs = list_subscriptions(photon).await?;
+    let subs = list_subscriptions_at(photon, now, stall_after).await?;
     Ok(find_subscription_by_id(&subs, id).cloned())
+}
+
+async fn require_subscription_summary(
+    photon: &Photon,
+    id: &str,
+) -> Result<SubscriptionSummary, OpsError> {
+    load_subscription(photon, id)
+        .await?
+        .ok_or(OpsError::SubscriptionNotFound)
+}
+
+/// The events a subscription still owes, oldest first, up to `limit`.
+///
+/// Reads the topic after the subscription's checkpoint. For a consumer group that is the
+/// lowest shard checkpoint, so the list can include events another shard already handled.
+pub async fn load_waiting_events(
+    photon: &Photon,
+    id: &str,
+    limit: u32,
+) -> Result<WaitingEvents, OpsError> {
+    let sub = require_subscription_summary(photon, id).await?;
+    if sub.waiting == 0 {
+        return Ok(WaitingEvents::default());
+    }
+    let query = photon::ListEventsQuery {
+        topic: Some(sub.topic_name.clone()),
+        after_seq: Some(sub.last_seq.unwrap_or(0)),
+        newest_first: false,
+        limit: clamp_waiting_limit(limit),
+        ..photon::ListEventsQuery::default()
+    };
+    let events = photon
+        .list_events(&query)
+        .await
+        .map_err(|e| photon_io_err("list waiting events", e))?;
+    Ok(WaitingEvents {
+        events: events.iter().map(map_transport_event).collect(),
+        total: sub.waiting,
+    })
+}
+
+/// Stops dispatch to a subscription; `by` is the display label recorded with it.
+pub async fn pause_subscription(photon: &Photon, id: &str, by: &str) -> Result<(), OpsError> {
+    validate_subscription_id(id)?;
+    photon
+        .pause(id, by)
+        .await
+        .map_err(|e| control_err("pause subscription", e))
+}
+
+/// Clears a pause; the subscription restarts from its checkpoint.
+pub async fn resume_subscription(photon: &Photon, id: &str, by: &str) -> Result<(), OpsError> {
+    validate_subscription_id(id)?;
+    photon
+        .resume(id, by)
+        .await
+        .map_err(|e| control_err("resume subscription", e))
+}
+
+/// Cuts the current retry backoff short so the failing event runs again now.
+pub fn retry_subscription_now(photon: &Photon, id: &str, by: &str) -> Result<(), OpsError> {
+    validate_subscription_id(id)?;
+    photon
+        .retry_now(id, by)
+        .map_err(|e| control_err("retry subscription", e))
+}
+
+/// Moves the checkpoint to the head; returns how many waiting events were dropped.
+pub async fn skip_subscription_to_latest(
+    photon: &Photon,
+    id: &str,
+    by: &str,
+) -> Result<u64, OpsError> {
+    validate_subscription_id(id)?;
+    photon
+        .skip_to_latest(id, by)
+        .await
+        .map_err(|e| control_err("skip subscription", e))
+}
+
+fn replay_from(point: &ReplayPoint, now: DateTime<Utc>) -> Result<photon::ReplayFrom, OpsError> {
+    let at = validate_replay_point(point, now)?;
+    Ok(match point {
+        ReplayPoint::AfterSeq(seq) => photon::ReplayFrom::Seq(seq.saturating_add(1)),
+        ReplayPoint::Time(_) => photon::ReplayFrom::Time(at.unwrap_or(now)),
+        ReplayPoint::Event(id) => photon::ReplayFrom::Event(id.trim().to_string()),
+    })
+}
+
+const fn preview_summary(p: &photon::ReplayPreview) -> ReplayPreviewSummary {
+    ReplayPreviewSummary {
+        from_seq: p.from_seq,
+        count: p.count,
+        already_handled: p.already_handled,
+    }
+}
+
+/// What [`replay_subscription`] would resend from `point`, without moving the checkpoint.
+pub async fn replay_preview(
+    photon: &Photon,
+    id: &str,
+    point: &ReplayPoint,
+) -> Result<ReplayPreviewSummary, OpsError> {
+    validate_subscription_id(id)?;
+    let from = replay_from(point, Utc::now())?;
+    photon
+        .replay_preview(id, &from)
+        .await
+        .map(|p| preview_summary(&p))
+        .map_err(|e| control_err("preview replay", e))
+}
+
+/// Moves the checkpoint back to `point` so the subscription handles those events again.
+pub async fn replay_subscription(
+    photon: &Photon,
+    id: &str,
+    point: &ReplayPoint,
+    by: &str,
+) -> Result<ReplayPreviewSummary, OpsError> {
+    validate_subscription_id(id)?;
+    let from = replay_from(point, Utc::now())?;
+    photon
+        .replay(id, &from, by)
+        .await
+        .map(|p| preview_summary(&p))
+        .map_err(|e| control_err("replay subscription", e))
 }
 
 /// Events across all topics or filtered by topic name.
