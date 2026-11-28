@@ -13,12 +13,12 @@ use crate::{
     checkpoint_delivery_state, clamp_event_list_limit, clamp_events_page, count_since,
     dashboard_stats, event_detail_from_transport, event_detail_transport_expired,
     event_summary_from_transport, events_window, find_checkpoint_head_seq, find_checkpoint_seq,
-    find_subscription_by_id, find_topic_by_name, normalize_events_search, payload_fields,
-    published_by, sort_topics_by_name, subscription_summary_from_handler, topic_summary,
-    validate_event_id, validate_subscription_id, validate_topic_name, CheckpointRow,
-    DashboardStats, DeliveryRow, DeliveryState, EventDetail, EventSummary, EventsPage, EventsQuery,
-    EventsQueryError, PayloadField, PhotonIdError, SubscriptionSummary, TopicSummary,
-    EVENTS_PAGE_SIZE, MAX_EVENTS_PAGE,
+    find_subscription_by_id, find_topic_by_name, mask_values, normalize_events_search,
+    payload_fields, personal_values, published_by, sort_topics_by_name,
+    subscription_summary_from_handler, topic_summary, validate_event_id, validate_subscription_id,
+    validate_topic_name, CheckpointRow, DashboardStats, DeliveryRow, DeliveryState, EventDetail,
+    EventSummary, EventsPage, EventsQuery, EventsQueryError, PayloadField, PhotonIdError,
+    SubscriptionSummary, TopicSummary, EVENTS_PAGE_SIZE, MAX_EVENTS_PAGE,
 };
 
 /// Operator-facing ops failure (maps to `ServerFnError` at the Leptos boundary).
@@ -442,8 +442,11 @@ pub async fn load_event(photon: &Photon, id: &str) -> Result<Option<EventDetail>
         .map_err(|e| photon_io_err("get transport event", e))?;
     let dlq = photon.dlq_for_event(id);
 
+    // Values to mask out of handler error text; `None` once the payload is gone.
+    let mut redact = None;
     let mut detail = if let Some(t) = transport {
         let personal = personal_fields_for(photon, &t.topic_name);
+        redact = Some(personal_values(&t.payload_json, &t.actor_json, &personal));
         event_detail_from_transport(
             t.event_id,
             t.topic_name,
@@ -467,18 +470,24 @@ pub async fn load_event(photon: &Photon, id: &str) -> Result<Option<EventDetail>
         return Ok(None);
     };
     detail.retention_secs = snap.backend.max_replay_window_secs;
-    detail.deliveries = delivery_rows(photon, &snap, &detail, &dlq).await?;
+    detail.deliveries = delivery_rows(photon, &snap, &detail, &dlq, redact.as_deref()).await?;
     Ok(Some(detail))
 }
 
 /// One row per handler on the event's topic: Failed when the handler is retrying the event
 /// or dead-lettered it, otherwise Handled or Waiting from its checkpoint.
+///
+/// Handler errors often quote payload values, so `redact` (the event's personal values) is
+/// masked out of them. With no payload to read the values from, the error text is dropped.
 async fn delivery_rows(
     photon: &Photon,
     snap: &photon::AdminSnapshot,
     event: &EventDetail,
     dlq: &[photon::DlqRecord],
+    redact: Option<&[String]>,
 ) -> Result<Vec<DeliveryRow>, OpsError> {
+    let safe_error =
+        |text: &str| redact.map_or_else(String::new, |values| mask_values(text, values));
     let mut rows = Vec::new();
     for h in snap
         .handlers
@@ -501,7 +510,7 @@ async fn delivery_rows(
             (
                 DeliveryState::Failed {
                     attempts: r.attempt,
-                    error: h.health.last_error.clone().unwrap_or_default(),
+                    error: safe_error(h.health.last_error.as_deref().unwrap_or_default()),
                     next_retry_at: Some(r.next_retry_at.to_rfc3339()),
                 },
                 h.health.last_error_at.map(|t| t.to_rfc3339()),
@@ -510,7 +519,7 @@ async fn delivery_rows(
             (
                 DeliveryState::Failed {
                     attempts: d.attempt,
-                    error: d.error.clone(),
+                    error: safe_error(&d.error),
                     next_retry_at: None,
                 },
                 Some(d.recorded_at.to_rfc3339()),

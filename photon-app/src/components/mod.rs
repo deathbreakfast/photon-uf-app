@@ -6,6 +6,7 @@ mod event_delivery_card;
 mod event_filter_toolbar;
 mod event_meta_card;
 mod event_payload_card;
+mod events_data_table;
 mod events_table;
 mod photon_stats_grid;
 mod redeliver_dialog;

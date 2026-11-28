@@ -26,7 +26,8 @@ valence_schema! {
                 r#type: FieldType::Enum(&["support", "debugging", "data_subject_request"]),
                 required: true,
             },
-            details: { r#type: FieldType::String, required: true },
+            // Free text from the person revealing; it often quotes customer details.
+            details: { r#type: FieldType::String, required: true, encrypted: true },
         ],
 
         connections: [

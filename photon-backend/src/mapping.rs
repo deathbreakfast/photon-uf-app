@@ -208,6 +208,38 @@ pub fn payload_fields(
     }
 }
 
+/// The event's personal values as text: each `personal` payload field (strings as-is, other
+/// values as JSON) and a publishing person's user id. Empty values are left out.
+#[must_use]
+pub fn personal_values(
+    payload: &serde_json::Value,
+    actor_json: &serde_json::Value,
+    personal: &[&str],
+) -> Vec<String> {
+    let mut values: Vec<String> = personal
+        .iter()
+        .filter_map(|name| payload.get(*name))
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .collect();
+    values.extend(published_by(actor_json).1);
+    values.retain(|v| !v.is_empty() && v != "null");
+    values
+}
+
+/// `text` with every occurrence of each value replaced by [`MASKED_VALUE`], longest first so a
+/// value inside another is masked with it.
+#[must_use]
+pub fn mask_values(text: &str, values: &[String]) -> String {
+    let mut sorted: Vec<&String> = values.iter().collect();
+    sorted.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    sorted.into_iter().fold(text.to_string(), |acc, v| {
+        acc.replace(v.as_str(), MASKED_VALUE)
+    })
+}
+
 /// Who published an event, from the Valence actor JSON Photon captured, plus the user id
 /// when it was a person.
 ///

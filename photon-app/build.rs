@@ -8,7 +8,7 @@ fn main() {
         return;
     }
     let Ok(out_dir) = std::env::var("OUT_DIR") else {
-        std::process::exit(1);
+        panic!("valence codegen: OUT_DIR is not set (build.rs must run under cargo)");
     };
     if let Err(error) = valence_codegen::generate_models(&valence_codegen::CodegenConfig {
         schemas_dir: std::path::PathBuf::from("schemas"),

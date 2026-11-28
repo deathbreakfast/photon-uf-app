@@ -144,7 +144,7 @@ pub use mapping::{
     event_detail_from_transport, event_detail_transport_expired, event_summary_from_meta,
     event_summary_from_transport, filter_subscriptions_by_topic, find_checkpoint_head_seq,
     find_checkpoint_seq, find_subscription_by_id, find_topic_by_name, format_delivery_preview,
-    mask_payload, payload_fields, published_by, sort_topics_by_name,
+    mask_payload, mask_values, payload_fields, personal_values, published_by, sort_topics_by_name,
     subscription_summary_from_handler, topic_summary, CheckpointRow,
 };
 pub use types::{
@@ -442,6 +442,20 @@ mod tests {
         assert_eq!(payload_fields(&serde_json::Value::Null, &[], false), vec![]);
         let scalar = payload_fields(&serde_json::json!(7), &[], false);
         assert_eq!(scalar[0].name, "value");
+    }
+
+    #[test]
+    fn handler_errors_lose_personal_values() {
+        let payload = serde_json::json!({"customer_email": "a@b.c", "n": 7});
+        let actor = serde_json::json!({"User": {"user_id": "ines"}});
+        let values = personal_values(&payload, &actor, &["customer_email"]);
+        assert_eq!(values, vec!["a@b.c".to_string(), "ines".to_string()]);
+        let masked = mask_values("invalid email a@b.c for ines", &values);
+        assert_eq!(
+            masked,
+            format!("invalid email {MASKED_VALUE} for {MASKED_VALUE}")
+        );
+        assert_eq!(mask_values("no match", &values), "no match");
     }
 
     #[test]
