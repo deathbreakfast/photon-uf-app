@@ -222,6 +222,7 @@ async fn reader_can(
 /// The reader's role label on one resource, checking the strongest action first.
 #[cfg(feature = "ssr")]
 async fn reader_access(
+    request: &RequestContexts,
     backend: Option<&std::sync::Arc<dyn uf_product::access::ResourceAccessBackend>>,
     resource: &uf_product::access::ResourceRef,
     has_edit: bool,
@@ -232,6 +233,7 @@ async fn reader_access(
         &["Maintain", "Run", "View"]
     };
     for action in actions {
+        request.restore();
         if reader_can(backend, resource, action).await {
             return crate::permissions::access_label(&[action]);
         }
@@ -242,17 +244,14 @@ async fn reader_access(
 /// Names of the topics the reader can View.
 #[cfg(feature = "ssr")]
 async fn viewable_topics(photon: &photon::Photon) -> std::collections::HashSet<String> {
+    let request = RequestContexts::capture();
     let backend = uf_product::access::use_resource_access_backend();
     let mut names = std::collections::HashSet::new();
     for desc in photon.registry().iter() {
         let name = desc.topic_name.to_string();
-        if reader_can(
-            backend.as_ref(),
-            &crate::permissions::topic_ref(&name),
-            "View",
-        )
-        .await
-        {
+        let resource = crate::permissions::topic_ref(&name);
+        request.restore();
+        if reader_can(backend.as_ref(), &resource, "View").await {
             names.insert(name);
         }
     }
@@ -310,28 +309,57 @@ async fn resource_owners(
     }
 }
 
-/// One subscription as a row: the reader's role, owners, and read state unless No access.
+/// The request contexts an access backend reads the session from, captured while the
+/// server fn still has them.
+///
+/// During SSR a long server fn can lose its owner's contexts partway through (each access
+/// check reads `HiggsConfig` and the request parts again). [`Self::restore`] provides them
+/// again on the current owner before the next backend call, so a list of many rows checks
+/// every row as the reader instead of failing closed.
 #[cfg(feature = "ssr")]
-async fn subscription_row(
-    backend: Option<&std::sync::Arc<dyn uf_product::access::ResourceAccessBackend>>,
+struct RequestContexts {
+    higgs: Option<std::sync::Arc<higgs::HiggsConfig>>,
+    parts: Option<http::request::Parts>,
+}
+
+#[cfg(feature = "ssr")]
+impl RequestContexts {
+    fn capture() -> Self {
+        Self {
+            higgs: leptos::context::use_context::<std::sync::Arc<higgs::HiggsConfig>>(),
+            parts: leptos::context::use_context::<http::request::Parts>(),
+        }
+    }
+
+    fn restore(&self) {
+        if leptos::context::use_context::<std::sync::Arc<higgs::HiggsConfig>>().is_none() {
+            if let Some(higgs) = &self.higgs {
+                provide_context(std::sync::Arc::clone(higgs));
+            }
+        }
+        if leptos::context::use_context::<http::request::Parts>().is_none() {
+            if let Some(parts) = &self.parts {
+                provide_context(parts.clone());
+            }
+        }
+    }
+}
+
+/// A subscription as a row: the reader's role and its owners (`(label, default_owner)`).
+#[cfg(feature = "ssr")]
+fn subscription_row(
     sub: SubscriptionSummary,
+    access: &str,
+    owner_rows: &[(String, bool)],
 ) -> SubscriptionRow {
-    let resource = crate::permissions::subscription_ref(&sub.subscription_id);
-    let access = reader_access(backend, &resource, true).await;
-    let owner_rows = resource_owners(backend, &resource).await;
     let mut owners: Vec<String> = owner_rows.iter().map(|(l, _)| l.clone()).collect();
     if owners.is_empty() {
         owners.push(crate::permissions::DEFAULT_OWNER_LABEL.to_string());
     }
-    let sub = if access == crate::permissions::NO_ACCESS {
-        redact_subscription(sub)
-    } else {
-        sub
-    };
     SubscriptionRow {
         sub,
         access: access.to_string(),
-        owner: owner_label(&owner_rows),
+        owner: owner_label(owner_rows),
         owners,
     }
 }
@@ -403,6 +431,7 @@ pub async fn get_recent_events(
 /// Topics the reader holds nothing on come back with only their name.
 #[uf_product_macros::server]
 pub async fn get_topics() -> Result<Vec<TopicRow>, ServerFnError> {
+    let request = RequestContexts::capture();
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
@@ -413,7 +442,7 @@ pub async fn get_topics() -> Result<Vec<TopicRow>, ServerFnError> {
     let mut rows = Vec::with_capacity(topics.len());
     for topic in topics {
         let resource = crate::permissions::topic_ref(&topic.topic_name);
-        let access = reader_access(backend.as_ref(), &resource, false).await;
+        let access = reader_access(&request, backend.as_ref(), &resource, false).await;
         let topic = if access == crate::permissions::NO_ACCESS {
             redact_topic(topic)
         } else {
@@ -457,6 +486,7 @@ pub async fn get_topic(
 /// Subscriptions the reader holds nothing on come back with only their id, name and topic.
 #[uf_product_macros::server]
 pub async fn get_subscriptions() -> Result<Vec<SubscriptionRow>, ServerFnError> {
+    let request = RequestContexts::capture();
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
@@ -466,11 +496,32 @@ pub async fn get_subscriptions() -> Result<Vec<SubscriptionRow>, ServerFnError> 
             .map_err(|e| map_ops_err(&e))?;
     photon_backend::sort_worst_first(&mut subs);
     let backend = uf_product::access::use_resource_access_backend();
-    let mut rows = Vec::with_capacity(subs.len());
+    let mut checked = Vec::with_capacity(subs.len());
     for sub in subs {
-        rows.push(subscription_row(backend.as_ref(), sub).await);
+        let resource = crate::permissions::subscription_ref(&sub.subscription_id);
+        request.restore();
+        let access = reader_access(&request, backend.as_ref(), &resource, true).await;
+        let sub = if access == crate::permissions::NO_ACCESS {
+            redact_subscription(sub)
+        } else {
+            sub
+        };
+        checked.push((sub, access, resource));
     }
-    Ok(rows)
+    // Owner lookups start together, so each reads the session while the restored contexts
+    // are still there.
+    request.restore();
+    let owners = futures::future::join_all(
+        checked
+            .iter()
+            .map(|(_, _, resource)| resource_owners(backend.as_ref(), resource)),
+    )
+    .await;
+    Ok(checked
+        .into_iter()
+        .zip(owners)
+        .map(|((sub, access, _), owner_rows)| subscription_row(sub, access, &owner_rows))
+        .collect())
 }
 
 /// Get a single subscription by ID, with the reader's role and its owners. Needs View on
@@ -482,6 +533,7 @@ pub async fn get_subscription(
     /// Unique identifier of the subscription to look up.
     id: String,
 ) -> Result<Option<SubscriptionRow>, ServerFnError> {
+    let request = RequestContexts::capture();
     let ctx = higgs::Higgs::from_request().await?;
     require_session(&ctx)?;
     let photon = photon_from_context()?;
@@ -496,7 +548,11 @@ pub async fn get_subscription(
     };
     require_subscription(&id, "View").await?;
     let backend = uf_product::access::use_resource_access_backend();
-    Ok(Some(subscription_row(backend.as_ref(), sub).await))
+    let resource = crate::permissions::subscription_ref(&id);
+    let access = reader_access(&request, backend.as_ref(), &resource, true).await;
+    request.restore();
+    let owner_rows = resource_owners(backend.as_ref(), &resource).await;
+    Ok(Some(subscription_row(sub, access, &owner_rows)))
 }
 
 /// The events a subscription still owes, oldest first, with the total waiting. Needs View
