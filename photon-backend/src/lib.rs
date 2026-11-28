@@ -96,6 +96,15 @@
 //! [`EventSummary`] rows ready for JSON serialization. Lookup helpers return `None` when
 //! the id or name is absent from the caller-provided slice.
 //!
+//! ## Subscription health
+//!
+//! [`subscription_summary_from_snapshot`] fills a [`SubscriptionSummary`] from one handler in
+//! Photon's admin snapshot, with [`aggregate_checkpoints`] folding a consumer group's shard
+//! checkpoints into one read state. [`derive_health`] names the result: Paused, Not started,
+//! Failing, Stalled (events wait and nothing was handled for [`DEFAULT_STALL_AFTER`]),
+//! Catching up, or Healthy. [`sort_worst_first`] orders a list that way, and
+//! [`waiting_text`], [`lag_words`] and [`time_words`] give the words the pages show.
+//!
 //! ## Dashboard KPIs
 //!
 //! Dashboard aggregates package registry size and recent event volume into a single
