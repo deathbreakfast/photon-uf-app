@@ -30,6 +30,22 @@ static STORAGE: OnceCell<Arc<InProcStoragePort>> = OnceCell::const_new();
 static ORDERS: OnceCell<OrderFixtures> = OnceCell::const_new();
 static CONFIRMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// Every `#[tokio::test]` has its own runtime, and the executor's tasks die with the runtime
+/// that started them. The shared Photon starts (and publishes) here so its handlers keep
+/// running after the test that built it ends.
+static EXECUTOR_RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("executor runtime")
+});
+
+async fn on_executor_rt<T: Send + 'static>(
+    fut: impl std::future::Future<Output = T> + Send + 'static,
+) -> T {
+    EXECUTOR_RT.spawn(fut).await.expect("executor runtime task")
+}
+
 const ORDERS_TOPIC: &str = "test.photon.ops.orders";
 
 #[topic(name = "test.photon.ops.orders", keyed_by = "order_id")]
@@ -80,86 +96,90 @@ struct OrderFixtures {
 /// whose payload is trimmed after `fraud` dead-letters it. `warehouse` is paused throughout.
 async fn order_fixtures() -> &'static OrderFixtures {
     ORDERS
-        .get_or_init(|| async {
-            let photon = shared_photon().await;
-            let storage = STORAGE.get().expect("storage").clone();
-            photon
-                .pause(&format!("{ORDERS_TOPIC}:warehouse"), "test")
-                .await
-                .expect("pause warehouse");
-            let system = serde_json::json!({"System": {"operation": "test"}});
-            let person = serde_json::json!({"User": {"user_id": "ines"}});
-            let order = |key: &str, n: u32| {
-                serde_json::json!({
-                    "order_id": key,
-                    "customer_email": format!("customer{n}@example.com"),
-                    "total_cents": 1000 + n,
-                })
-            };
-            let mut first_id = String::new();
-            for n in 1..=27u32 {
-                let key = format!("ord-{n:04}");
-                let actor = if n == 1 {
-                    person.clone()
-                } else {
-                    system.clone()
-                };
-                let id = photon
-                    .publish(ORDERS_TOPIC, Some(&key), actor, order(&key, n))
-                    .await
-                    .expect("publish order");
-                if n == 1 {
-                    first_id = id;
-                }
-            }
-            for n in 0..3u32 {
+        .get_or_init(|| {
+            on_executor_rt(async {
+                let photon = shared_photon().await;
+                let storage = STORAGE.get().expect("storage").clone();
                 photon
+                    .pause(&format!("{ORDERS_TOPIC}:warehouse"), "test")
+                    .await
+                    .expect("pause warehouse");
+                let system = serde_json::json!({"System": {"operation": "test"}});
+                let person = serde_json::json!({"User": {"user_id": "ines"}});
+                let order = |key: &str, n: u32| {
+                    serde_json::json!({
+                        "order_id": key,
+                        "customer_email": format!("customer{n}@example.com"),
+                        "total_cents": 1000 + n,
+                    })
+                };
+                let mut first_id = String::new();
+                for n in 1..=27u32 {
+                    let key = format!("ord-{n:04}");
+                    let actor = if n == 1 {
+                        person.clone()
+                    } else {
+                        system.clone()
+                    };
+                    let id = photon
+                        .publish(ORDERS_TOPIC, Some(&key), actor, order(&key, n))
+                        .await
+                        .expect("publish order");
+                    if n == 1 {
+                        first_id = id;
+                    }
+                }
+                for n in 0..3u32 {
+                    photon
+                        .publish(
+                            ORDERS_TOPIC,
+                            Some("ord-search"),
+                            system.clone(),
+                            order("ord-search", 100 + n),
+                        )
+                        .await
+                        .expect("publish search order");
+                }
+                let expired_id = photon
                     .publish(
                         ORDERS_TOPIC,
-                        Some("ord-search"),
+                        Some("ord-expired"),
                         system.clone(),
-                        order("ord-search", 100 + n),
+                        order("ord-expired", 999),
                     )
                     .await
-                    .expect("publish search order");
-            }
-            let expired_id = photon
-                .publish(
-                    ORDERS_TOPIC,
-                    Some("ord-expired"),
-                    system.clone(),
-                    order("ord-expired", 999),
-                )
-                .await
-                .expect("publish expired order");
-            for _ in 0..50 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if !photon.dlq_for_event(&expired_id).is_empty() && confirmations("ord-expired") > 0
-                {
-                    break;
+                    .expect("publish expired order");
+                for _ in 0..300 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if !photon.dlq_for_event(&expired_id).is_empty()
+                        && confirmations("ord-expired") > 0
+                        && confirmations("ord-0001") > 0
+                    {
+                        break;
+                    }
                 }
-            }
-            photon
-                .runtime()
-                .executor_services
-                .checkpoint_coalescer
-                .flush()
-                .await
-                .expect("flush checkpoints");
-            let seq = photon
-                .get_event(&expired_id)
-                .await
-                .expect("get")
-                .expect("expired order before trim")
-                .seq;
-            storage
-                .truncate_before(ORDERS_TOPIC, Some("ord-expired"), seq + 1)
-                .await
-                .expect("trim");
-            OrderFixtures {
-                first_id,
-                expired_id,
-            }
+                photon
+                    .runtime()
+                    .executor_services
+                    .checkpoint_coalescer
+                    .flush()
+                    .await
+                    .expect("flush checkpoints");
+                let seq = photon
+                    .get_event(&expired_id)
+                    .await
+                    .expect("get")
+                    .expect("expired order before trim")
+                    .seq;
+                storage
+                    .truncate_before(ORDERS_TOPIC, Some("ord-expired"), seq + 1)
+                    .await
+                    .expect("trim");
+                OrderFixtures {
+                    first_id,
+                    expired_id,
+                }
+            })
         })
         .await
 }
@@ -209,45 +229,47 @@ fn ensure_transport_key() {
 
 async fn shared_photon() -> Arc<Photon> {
     PHOTON
-        .get_or_init(|| async {
-            ensure_transport_key();
-            HANDLER_HITS.store(0, Ordering::SeqCst);
+        .get_or_init(|| {
+            on_executor_rt(async {
+                ensure_transport_key();
+                HANDLER_HITS.store(0, Ordering::SeqCst);
 
-            let storage = Arc::new(InProcStoragePort::new(
-                TransportCrypto::from_env().expect("transport key"),
-            ));
-            STORAGE.set(Arc::clone(&storage)).ok();
-            let photon = Photon::builder()
-                .storage_port(storage as Arc<dyn StoragePort>)
-                .auto_registry()
-                .build()
-                .expect("build photon");
-            photon
-                .start_executor(Arc::new(JsonIdentityFactory))
-                .expect("start executor");
-            configure(photon.clone());
+                let storage = Arc::new(InProcStoragePort::new(
+                    TransportCrypto::from_env().expect("transport key"),
+                ));
+                STORAGE.set(Arc::clone(&storage)).ok();
+                let photon = Photon::builder()
+                    .storage_port(storage as Arc<dyn StoragePort>)
+                    .auto_registry()
+                    .build()
+                    .expect("build photon");
+                photon
+                    .start_executor(Arc::new(JsonIdentityFactory))
+                    .expect("start executor");
+                configure(photon.clone());
 
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-            OpsContractEvent { value: 42 }
-                .publish()
-                .await
-                .expect("publish");
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                OpsContractEvent { value: 42 }
+                    .publish()
+                    .await
+                    .expect("publish");
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-            photon
-                .runtime()
-                .executor_services
-                .checkpoint_coalescer
-                .flush()
-                .await
-                .expect("flush checkpoints");
+                photon
+                    .runtime()
+                    .executor_services
+                    .checkpoint_coalescer
+                    .flush()
+                    .await
+                    .expect("flush checkpoints");
 
-            assert!(
-                HANDLER_HITS.load(Ordering::SeqCst) >= 1,
-                "durable handler must run"
-            );
-            Arc::new(photon)
+                assert!(
+                    HANDLER_HITS.load(Ordering::SeqCst) >= 1,
+                    "durable handler must run"
+                );
+                Arc::new(photon)
+            })
         })
         .await
         .clone()

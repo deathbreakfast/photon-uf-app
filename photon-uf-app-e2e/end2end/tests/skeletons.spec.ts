@@ -109,7 +109,7 @@ test.describe("e2e.skeletons", () => {
     release();
     await expect(skeleton).toHaveCount(0, { timeout: 30_000 });
     await expect(
-      events.getByTestId("photon-events-table").getByText(seeded.fixtures.topic_name, { exact: true }).first(),
+      events.getByTestId("photon-events-table").locator('a[href^="/photon/events/"]').first(),
     ).toBeVisible();
     await expectShellKept(page);
   });

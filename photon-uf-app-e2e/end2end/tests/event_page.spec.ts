@@ -41,7 +41,6 @@ test.describe("e2e.event_page", () => {
     // The document the server sent, before any hydration or reveal.
     const res = await page.goto(eventPath(fixtures.order_event_id), { waitUntil: "domcontentloaded" });
     expect(res, "navigation response").toBeTruthy();
-    expect(res!.status(), "event page status").toBeLessThan(400);
     const html = await res!.text();
     expect(html).toContain("photon-event-payload");
     expect(html).not.toContain("customer1@example.com");

@@ -4,7 +4,10 @@ import { test, expect, seedAuth, waitForHydrated } from "./fixtures";
 test.describe("e2e.events", () => {
   test("e2e.events.index_happy", async ({ page }) => {
     const seeded = await seedAuth(page, "admin");
-    await page.goto("/photon/events", { waitUntil: "domcontentloaded" });
+    // The orders fixture is newer, so filter to the ops topic to find its event.
+    await page.goto(`/photon/events?topic=${encodeURIComponent(seeded.fixtures.topic_name)}`, {
+      waitUntil: "domcontentloaded",
+    });
     await waitForHydrated(page);
     const events = page.getByTestId("photon-events");
     await expect(events).toBeVisible({ timeout: 60_000 });

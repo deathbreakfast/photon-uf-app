@@ -443,9 +443,12 @@ async fn bootstrap_order_fixtures(
         .await?;
 
     // Let every handler run (fraud-check dead-letters each order), then commit checkpoints.
-    for _ in 0..50 {
+    for _ in 0..300 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        if !photon.dlq_for_event(&expired_id).is_empty() && e2e_confirmations(E2E_EXPIRED_KEY) > 0 {
+        if !photon.dlq_for_event(&expired_id).is_empty()
+            && e2e_confirmations(E2E_EXPIRED_KEY) > 0
+            && e2e_confirmations("ord-0001") > 0
+        {
             break;
         }
     }
