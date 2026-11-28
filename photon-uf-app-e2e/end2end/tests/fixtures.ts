@@ -8,6 +8,19 @@ export type SeedFixtures = {
   topic_name: string;
   subscription_id: string;
   event_id: string;
+  /** Orders topic: a personal field and handled, waiting and failed handlers. */
+  orders_topic: string;
+  /** An order a person published. */
+  order_event_id: string;
+  order_key: string;
+  /** A key on three orders. */
+  search_key: string;
+  /** Live events on the orders topic. */
+  orders_total: number;
+  /** An order whose payload was trimmed after it was dead-lettered. */
+  expired_event_id: string;
+  /** Times send-confirmation handled `order_key`. */
+  order_confirmations: number;
 };
 
 export async function seedAuth(page: Page, auth: SeedAuthKind) {

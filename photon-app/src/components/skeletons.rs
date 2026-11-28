@@ -204,8 +204,8 @@ pub fn EventDetailSkeleton() -> impl IntoView {
                     {code_lines(&["16px", "240px", "80px", "180px", "16px"])}
                 </Flex>
                 <Flex vertical=true gap=FlexGap::Small>
-                    <Subtitle2>"Actor"</Subtitle2>
-                    {code_lines(&["16px", "120px", "160px", "16px"])}
+                    <Subtitle2>"Subscriptions"</Subtitle2>
+                    {code_lines(&["160px", "120px", "160px"])}
                 </Flex>
             </Flex>
         </Skeleton>

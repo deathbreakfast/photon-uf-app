@@ -143,3 +143,58 @@ async fn require_photon_with_e2e_handle_happy() {
         .iter()
         .any(|t| t.topic_name == e2e_fixtures().topic_name));
 }
+
+#[tokio::test]
+async fn ops_order_fixtures_cover_every_event_page_state() {
+    use photon_backend::{DeliveryState, EventsQuery, PublishedBy};
+
+    init_e2e_valence().await;
+    let photon = e2e_photon();
+    let fixtures = e2e_fixtures();
+
+    let detail = load_event(&photon, &fixtures.order_event_id)
+        .await
+        .expect("order detail")
+        .expect("order exists");
+    assert_eq!(detail.published_by, PublishedBy::Person);
+    assert!(detail.has_personal());
+    let states: Vec<_> = detail
+        .deliveries
+        .iter()
+        .map(|d| (d.subscription_name.as_str(), d.state.clone()))
+        .collect();
+    assert!(
+        states.contains(&("send-confirmation", DeliveryState::Handled)),
+        "{states:?}"
+    );
+    assert!(
+        states.contains(&("warehouse", DeliveryState::Waiting { position: 1 })),
+        "{states:?}"
+    );
+    assert!(
+        states
+            .iter()
+            .any(|(n, s)| *n == "fraud-check" && matches!(s, DeliveryState::Failed { .. })),
+        "{states:?}"
+    );
+
+    let expired = load_event(&photon, &fixtures.expired_event_id)
+        .await
+        .expect("expired detail")
+        .expect("expired keeps metadata");
+    assert!(expired.transport_expired);
+
+    let page = photon_backend::ops::load_events_page(
+        &photon,
+        &EventsQuery {
+            topic: Some(fixtures.orders_topic.clone()),
+            page: 1,
+            ..EventsQuery::default()
+        },
+        &[fixtures.orders_topic.clone()],
+        chrono::Utc::now(),
+    )
+    .await
+    .expect("orders page");
+    assert_eq!(page.total, Some(fixtures.orders_total));
+}

@@ -10,7 +10,7 @@ test.describe("e2e.events", () => {
     await expect(events).toBeVisible({ timeout: 60_000 });
     // Topic also appears as a hidden <option>; assert the table cell instead.
     await expect(
-      events.getByRole("cell", { name: seeded.fixtures.topic_name }),
+      events.getByRole("gridcell", { name: seeded.fixtures.topic_name }).first(),
     ).toBeVisible({ timeout: 60_000 });
   });
 
@@ -34,7 +34,7 @@ test.describe("e2e.events", () => {
     });
     await waitForHydrated(page);
     await expect(page.getByTestId("photon-event-detail")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText("Event not found")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("No event with this id")).toBeVisible({ timeout: 60_000 });
   });
 });
 

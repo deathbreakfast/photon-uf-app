@@ -66,7 +66,7 @@ fn event_detail_transport_expired_shape_happy_path() {
     );
     assert!(detail.transport_expired);
     assert!(detail.payload_json.is_null());
-    assert!(detail.actor_json.is_null());
+    assert_eq!(detail.fields, vec![]);
     assert_eq!(detail.event_id, "evt-gone");
 }
 

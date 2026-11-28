@@ -35,15 +35,22 @@ orbital = { workspace = true, default-features = false }
 uf-integrations = { workspace = true, default-features = false }
 lepton-shell = { workspace = true, default-features = false }
 orbital-macros = { workspace = true }
+orbital-base-components = { workspace = true }
+orbital-data = { workspace = true }
 uf-product-macros = { workspace = true }
 uf-product = { workspace = true, default-features = false, optional = true }
 inventory = { workspace = true, optional = true }
 
 photon = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
+chrono = { workspace = true }
 higgs = { workspace = true, optional = true }
 gauge = { workspace = true, default-features = false, optional = true }
 valence = { workspace = true, optional = true }
+lepton = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+
+[build-dependencies]
+valence-codegen = { workspace = true }
 
 [features]
 default = []
@@ -66,7 +73,6 @@ ssr = [
     "photon/runtime",
     "photon/mem",
     "photon-backend/ops",
-    "dep:chrono",
     "dep:higgs",
     "higgs/ssr",
     "dep:uf-product",
@@ -75,4 +81,7 @@ ssr = [
     "dep:gauge",
     "gauge/ssr",
     "dep:valence",
+    "dep:lepton",
+    "lepton/ssr",
+    "dep:async-trait",
 ]

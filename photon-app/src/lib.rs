@@ -24,16 +24,18 @@
 //! - **Subscriptions browser** — Lists delivery handlers and opens detail pages via
 //!   [`get_subscriptions`] and [`get_subscription`].
 //!   [Get started](#browse-subscriptions)
-//! - **Events browser** — Lists stored transport events and opens detail pages via
-//!   [`get_events`] and [`get_event`]. [Get started](#browse-events)
+//! - **Events browser** — Searches events by id or key, topic and time with a total, and
+//!   opens an event page that says who handled it, via [`get_events_page`] and
+//!   [`get_event`]. Personal fields stay masked until [`reveal_event_fields`] records a
+//!   reason. [Get started](#browse-events)
 //! - **Server function wrappers** — Exposes [`mod@server`] Higgs `#[server]` fns and DTO
 //!   re-exports backed by [`photon_backend`] pure mapping helpers.
 //!
 //! ## Mount Photon routes
 //!
 //! [`PhotonRoutes`] nests the full `/photon` subtree inside a host Leptos `<Routes>` tree.
-//! Operators get read-only visibility into Photon registry topics, delivery subscriptions,
-//! and stored events. Mount during host router setup at startup, alongside other `uf_app!`
+//! Operators see Photon registry topics, delivery subscriptions and stored events, and can
+//! send one event to one subscription again. Mount during host router setup at startup, alongside other `uf_app!`
 //! product routes — the macro registers launcher metadata and the `/photon` inventory entry.
 //!
 //! **Prerequisites:** `ssr` on this crate; authenticated session; a
@@ -145,29 +147,29 @@
 //!
 //! ## Browse events
 //!
-//! Event pages list stored transport rows and full payload JSON on detail. [`PhotonEventsIndexPage`]
-//! loads [`get_events`] with a capped limit; [`PhotonEventDetailPage`] calls [`get_event`] for
-//! one id. Open these routes when operators audit delivery status or inspect payload bodies.
+//! [`PhotonEventsIndexPage`] searches events 25 at a time with [`get_events_page`]: an exact
+//! event id opens that event, anything else matches keys exactly, within a topic and a time
+//! range. [`PhotonEventDetailPage`] calls [`get_event`] for one id and shows each
+//! subscription as Handled, Waiting or Failed. Open these routes when operators trace an
+//! event or check who handled it.
 //!
-//! **Prerequisites:** Routes mounted; event ids must pass `photon_backend::validate_event_id`;
-//! list limits are capped by `photon_backend::clamp_event_list_limit`.
+//! **Prerequisites:** Routes mounted; event ids must pass `photon_backend::validate_event_id`.
+//! The host registers the `photon_event_reveal` Valence model (it ships in [`generated`]).
 //!
 //! ```rust,ignore
-//! use photon_app::{
-//!     PhotonEventsIndexPage, get_events, get_event, EventDetail,
-//! };
+//! use photon_app::{get_event, get_events_page, EventDetail, EventsQuery};
 //!
-//! // PhotonEventsIndexPage loads get_events with a capped limit:
-//! let rows = get_events(50).await?;
-//! assert!(rows.len() <= 50);
+//! let page = get_events_page(EventsQuery { q: Some("ord-318".into()), page: 1, ..Default::default() }).await?;
+//! assert!(page.rows.len() <= 25);
 //!
-//! let detail: EventDetail = get_event("ev-1".into()).await?;
-//! assert_eq!(detail.event_id, "ev-1");
+//! let detail: Option<EventDetail> = get_event("ev-1".into()).await?;
 //! ```
 //!
-//! On success the index returns [`EventSummary`] preview rows and detail returns full
-//! [`EventDetail`] including payload JSON when transport retention allows. Expired transport
-//! payloads surface `transport_expired` on detail without failing the page shell.
+//! Event details come back with personal fields masked. [`reveal_event_fields`] returns the
+//! real values after View on the topic and a reason, and records the reveal in the topic's
+//! reveal log ([`get_reveal_log`], owners only). An event whose payload has expired keeps its
+//! metadata (`transport_expired`) when the dead-letter queue still knows it; an unknown id
+//! returns `None`. [`redeliver_event`] sends one event to one subscription again.
 //!
 //! ## Feature flags
 //!
@@ -178,7 +180,7 @@
 //!
 //! ## Routes
 //!
-//! Mounted under `/photon` by [`PhotonRoutes`]. All routes are read-only today. Topic and
+//! Mounted under `/photon` by [`PhotonRoutes`]. Topic and
 //! subscription pages have an Access tab with the shared Access card.
 //!
 //! | Path | Page | Key server fn(s) |
@@ -188,8 +190,8 @@
 //! | `/photon/topics/:topic_name` | [`PhotonTopicDetailPage`] | [`get_topic`], [`get_subscriptions`], [`get_events`] |
 //! | `/photon/subscriptions` | [`PhotonSubscriptionsIndexPage`] | [`get_subscriptions`] |
 //! | `/photon/subscriptions/:id` | [`PhotonSubscriptionDetailPage`] | [`get_subscription`], [`get_events`] |
-//! | `/photon/events` | [`PhotonEventsIndexPage`] | [`get_events`] |
-//! | `/photon/events/:id` | [`PhotonEventDetailPage`] | [`get_event`] |
+//! | `/photon/events` | [`PhotonEventsIndexPage`] | [`get_events_page`], [`get_topics`] |
+//! | `/photon/events/:id` | [`PhotonEventDetailPage`] | [`get_event`], [`reveal_event_fields`], [`redeliver_event`] |
 //!
 //! ## Examples
 //!
@@ -227,6 +229,24 @@ pub mod permissions;
 /// SSR server functions and DTOs backing the Photon ops UI.
 pub mod server;
 
+/// Build-generated Valence models (the reveal log; its rules live in [`mod@server`]).
+#[cfg(feature = "ssr")]
+#[allow(
+    dead_code,
+    unused_imports,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::restriction
+)]
+pub mod generated {
+    use crate::server::{PHOTON_REVEALED_BY_VIEWER, PHOTON_TOPIC_OWNER_READ};
+    use valence::privacy_policies::common::BLOCK_ALL;
+
+    include!(concat!(env!("OUT_DIR"), "/generated_models.rs"));
+}
+
 pub use layout::PhotonLayout;
 pub use lazy_routes::{
     prefetch_family, PhotonDashboardRoute, PhotonEventDetailRoute, PhotonEventsIndexRoute,
@@ -239,8 +259,9 @@ pub use pages::{
     PhotonTopicsIndexPage,
 };
 pub use server::{
-    get_dashboard_stats, get_event, get_events, get_recent_events, get_subscription,
-    get_subscriptions, get_topic, get_topics, DashboardStats, EventDetail, EventSummary,
+    get_dashboard_stats, get_event, get_events, get_events_page, get_recent_events, get_reveal_log,
+    get_subscription, get_subscriptions, get_topic, get_topics, redeliver_event,
+    reveal_event_fields, DashboardStats, EventDetail, EventSummary, EventsPage, EventsQuery,
     SubscriptionRow, SubscriptionSummary, TopicRow, TopicSummary, PHOTON_ADMIN_PERMISSION,
 };
 

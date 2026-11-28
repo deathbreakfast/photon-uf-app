@@ -93,9 +93,7 @@ test.describe("e2e.skeletons", () => {
   test("e2e.skeletons.events_table", async ({ page }) => {
     const seeded = await seedAuth(page, "admin");
     const dash = await openDashboard(page);
-    // Hold every server fn. After client navigation the events page fetches only its
-    // topic list (the events arrive without a client call), and that is enough to keep
-    // the table on its skeleton.
+    // Hold every server fn so the events page stays on its table skeleton.
     const release = await holdServerFn(page, /\/api\//);
 
     // First "View All" is Recent Events.
@@ -104,14 +102,14 @@ test.describe("e2e.skeletons", () => {
     await expect(events).toBeVisible({ timeout: 30_000 });
     const skeleton = events.getByTestId("photon-table-skeleton");
     await expect(skeleton).toBeVisible();
-    for (const header of ["Event ID", "Topic", "Key", "Seq", "Created"]) {
+    for (const header of ["Event", "Topic", "Key", "Seq", "Published"]) {
       await expect(skeleton.getByText(header, { exact: true })).toBeVisible();
     }
 
     release();
     await expect(skeleton).toHaveCount(0, { timeout: 30_000 });
     await expect(
-      events.getByRole("cell", { name: seeded.fixtures.topic_name }).first(),
+      events.getByRole("gridcell", { name: seeded.fixtures.topic_name }).first(),
     ).toBeVisible();
     await expectShellKept(page);
   });
